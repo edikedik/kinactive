@@ -70,10 +70,13 @@ class DB:
         self._sifts: SIFTS | None = None
         self._pdb: PDB | None = None
         self._pk_hmm: PyHMMer | None = None
-        self._chains: abc.Sequence[Chain] = []
+        self._chains: ChainList[Chain] = ChainList([])
 
     @property
-    def chains(self):
+    def chains(self) -> ChainList[Chain]:
+        """
+        :return: Currently stored chains.
+        """
         return self._chains
 
     def _load_sifts(self, overwrite: bool = False) -> SIFTS:
@@ -131,6 +134,22 @@ class DB:
             with at least one PK domain structure passing filtering thresholds.
         """
 
+        def match_seq(s: ChainStructure) -> ChainStructure:
+            s.seq.match('seq1', 'seq1_canonical', as_fraction=True, save=True)
+            return s
+
+        def filter_domain_str_by_canon_seq_match(c: Chain) -> Chain:
+            c.transfer_seq_mapping(SeqNames.seq1, map_name_in_other='seq1_canonical')
+
+            match_name = 'Match_seq1_seq1_canonical'
+            c = c.apply_structures(match_seq).filter_structures(
+                lambda s: (
+                    len(s.seq) >= self.cfg.pk_min_str_domain_size
+                    and s.seq.meta[match_name] >= self.cfg.pk_min_str_seq_match
+                )
+            )
+            return c
+
         # 0. Init directories
         for dir_ in [
             self.cfg.target_dir,
@@ -172,7 +191,7 @@ class DB:
         seqs = seqs.filter(lambda x: len(x.children) > 0)
         LOGGER.info(f'Found {annotated_num} PK domains within {len(seqs)} seqs')
 
-        # seqs = ChainList(take(4, seqs))
+        seqs = ChainList(take(4, seqs))
 
         # Get IDs UniProt IDs and corresponding PDB Chains
         uni_ids = [x.id.split('|')[1] for x in seqs]
@@ -234,22 +253,6 @@ class DB:
                         f'Failed to init child {seq_child} for Chain {c}'
                     ) from e
 
-        def match_seq(s: ChainStructure) -> ChainStructure:
-            s.seq.match('seq1', 'seq1_canonical', as_fraction=True, save=True)
-            return s
-
-        def filter_domain_str_by_canon_seq_match(c: Chain) -> Chain:
-            c.transfer_seq_mapping(SeqNames.seq1, map_name_in_other='seq1_canonical')
-
-            match_name = 'Match_seq1_seq1_canonical'
-            c = c.apply_structures(match_seq).filter_structures(
-                lambda s: (
-                    len(s.seq) >= self.cfg.pk_min_str_domain_size
-                    and s.seq.meta[match_name] >= self.cfg.pk_min_str_seq_match
-                )
-            )
-            return c
-
         num_init = ilen(next(chains.iter_children()).iter_structures())
         chains = chains.apply(
             lambda c: c.apply_children(filter_domain_str_by_canon_seq_match)
@@ -258,7 +261,7 @@ class DB:
         LOGGER.info(
             f'Filtered to {num_curr} out of {num_init} domain structures '
             f'having >={self.cfg.pk_min_str_domain_size} extracted domain size '
-            f'and >={self.cfg.pk_min_str_seq_match} canonical seq match.'
+            f'and >={self.cfg.pk_min_str_seq_match} canonical seq match fraction.'
         )
 
         num_init = len(next(chains.iter_children()))
@@ -267,15 +270,15 @@ class DB:
         )
         num_curr = len(next(chains.iter_children()))
         LOGGER.info(
-            f'Filtered to {num_curr} out of {num_init} domains without '
-            'any valid structures'
+            f'Filtered to {num_curr} out of {num_init} domains with '
+            'at least one valid structures'
         )
 
         num_init = len(chains)
         chains = chains.filter(lambda c: len(c.children) > 0)
         LOGGER.info(
             f'Filtered to {len(chains)} chains out of {num_init} '
-            'without any extracted domains'
+            'with at least one extracted domains'
         )
 
         self._chains = chains
@@ -324,6 +327,10 @@ class DB:
         else:
             LOGGER.warning(f'Found no `Chain`s in {dump}')
         return chains
+
+    def fetch(self):
+        # TODO: implement fetching and unpacking
+        raise NotImplementedError
 
 
 if __name__ == '__main__':
