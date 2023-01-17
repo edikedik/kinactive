@@ -242,33 +242,36 @@ class DB:
         for c in _chains:
             for seq_child in c.seq.children:
                 try:
-                    c.spawn_child(
+                    child = c.spawn_child(
                         seq_child.start,
                         seq_child.end,
                         seq_child.name,
                         str_map_from=SeqNames.map_canonical,
                     )
+                    pk_name = self.cfg.pk_map_name
+                    child.seq.add_seq(pk_name, seq_child[pk_name])
+
                 except Exception as e:
                     raise RuntimeError(
                         f'Failed to init child {seq_child} for Chain {c}'
                     ) from e
 
-        num_init = ilen(next(chains.iter_children()).iter_structures())
+        num_init = ilen(chains.collapse_children().iter_structures())
         chains = chains.apply(
             lambda c: c.apply_children(filter_domain_str_by_canon_seq_match)
         )
-        num_curr = ilen(next(chains.iter_children()).iter_structures())
+        num_curr = ilen(chains.collapse_children().iter_structures())
         LOGGER.info(
             f'Filtered to {num_curr} out of {num_init} domain structures '
             f'having >={self.cfg.pk_min_str_domain_size} extracted domain size '
             f'and >={self.cfg.pk_min_str_seq_match} canonical seq match fraction.'
         )
 
-        num_init = len(next(chains.iter_children()))
+        num_init = len(chains.collapse_children())
         chains = chains.apply(
             lambda c: c.filter_children(lambda x: len(x.structures) > 0)
         )
-        num_curr = len(next(chains.iter_children()))
+        num_curr = len(chains.collapse_children())
         LOGGER.info(
             f'Filtered to {num_curr} out of {num_init} domains with '
             'at least one valid structures'
@@ -280,6 +283,9 @@ class DB:
             f'Filtered to {len(chains)} chains out of {num_init} '
             'with at least one extracted domains'
         )
+
+        for c in chains.collapse_children():
+            c.transfer_seq_mapping(self.cfg.pk_map_name)
 
         self._chains = chains
 
