@@ -14,6 +14,7 @@ from lXtractor.core.chain import (
     Chain,
     ChainIO,
 )
+from lXtractor.core.chain.tree import make_str_tree
 from lXtractor.core.config import SeqNames
 from lXtractor.ext.hmm import PyHMMer
 from lXtractor.ext.pdb_ import PDB
@@ -22,16 +23,17 @@ from lXtractor.ext.uniprot import fetch_uniprot
 from lXtractor.protocols import filter_by_method
 from lXtractor.util.io import get_files
 from lXtractor.util.seq import read_fasta, write_fasta
-from more_itertools import take, ilen
+from more_itertools import ilen, take
 from toolz import keymap, keyfilter, groupby, itemmap, curry
 from tqdm.auto import tqdm
 
 from kinactive.config import DBConfig
 
+CT_: t.TypeAlias = Chain | ChainSequence | ChainStructure
 LOGGER = logging.getLogger(__name__)
 
 
-def get_remaining(names: abc.Iterable[str], dir_: Path) -> set[str]:
+def _get_remaining(names: abc.Iterable[str], dir_: Path) -> set[str]:
     existing = {x.stem for x in get_files(dir_).values()}
     return set(names) - existing
 
@@ -64,7 +66,31 @@ def _rm_solvent(structures: list[ChainStructure]) -> list[ChainStructure]:
     return [s.rm_solvent() for s in structures]
 
 
+def _try_make_tree(objs: abc.Iterable[CT_]):
+    try:
+        make_str_tree(objs, connect=True)
+    except Exception as e:
+        LOGGER.exception(e)
+        LOGGER.warning(f'Failed to create a tree from objs {objs} due to {e}')
+
+
+def _connect_by_trees(c: Chain) -> Chain:
+    for child_seq in c.children.iter_sequences():
+        if c.seq.name in child_seq.meta['id']:
+            _try_make_tree([c.seq, child_seq])
+    for s in c.structures:
+        for child_str in c.children.iter_structures():
+            if s.name in child_str.meta['id']:
+                _try_make_tree([s, child_str])
+                _try_make_tree([s.seq, child_str.seq])
+    return c
+
+
 class DB:
+    """
+    An object encapsulating methods for building/saving/loading an lXtractor
+    "database" -- a collection of :class:`Chain`'s.
+    """
     def __init__(self, cfg: DBConfig):
         self.cfg = cfg
         self._sifts: SIFTS | None = None
@@ -121,7 +147,7 @@ class DB:
         assert _is_sequence_of_chain_seqs(chains), "correct types are returned"
         return ChainList(chains)
 
-    def get_sifts_xray(self) -> list[str]:
+    def _get_sifts_xray(self) -> list[str]:
         sifts = self._load_sifts()
         pdb = self._load_pdb()
         return filter_by_method(sifts.pdb_ids, pdb=pdb, method='X-ray')
@@ -164,7 +190,7 @@ class DB:
         pdb = self._load_pdb()
 
         # Fetch SIFTS UniProt seqs
-        fetch_ids = get_remaining(sifts.uniprot_ids, self.cfg.seq_dir)
+        fetch_ids = _get_remaining(sifts.uniprot_ids, self.cfg.seq_dir)
         LOGGER.info(f'{len(fetch_ids)} remaining sequences to fetch')
         self._fetch_seqs(fetch_ids)
 
@@ -192,6 +218,8 @@ class DB:
         LOGGER.info(f'Found {annotated_num} PK domains within {len(seqs)} seqs')
 
         seqs = ChainList(take(4, seqs))
+        # seqs = ChainList(islice(seqs, 150, 200))
+        # seqs = seqs.filter(lambda x: 'Q03145' in x.id)
 
         # Get IDs UniProt IDs and corresponding PDB Chains
         uni_ids = [x.id.split('|')[1] for x in seqs]
@@ -247,6 +275,7 @@ class DB:
                         seq_child.end,
                         seq_child.name,
                         str_map_from=SeqNames.map_canonical,
+                        tolerate_failure=True,
                     )
                     pk_name = self.cfg.pk_map_name
                     child.seq.add_seq(pk_name, seq_child[pk_name])
@@ -322,11 +351,15 @@ class DB:
         :return: A chain list with initialized :class:`Chain`s.
         """
         io = ChainIO(
-            num_proc=self.cfg.io_cpus, verbose=self.cfg.verbose, tolerate_failures=True
+            num_proc=self.cfg.io_cpus,
+            verbose=self.cfg.verbose,
+            tolerate_failures=True,
         )
+
         chains = ChainList(
-            x for x in io.read_chain(dump, search_children=True) if isinstance(x, Chain)
+            io.read_chain(dump, callbacks=[_connect_by_trees], search_children=True)
         )
+
         if len(chains) > 0:
             LOGGER.info(f'Parsed {len(chains)} `Chain`s')
             self._chains = chains

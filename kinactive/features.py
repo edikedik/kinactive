@@ -12,6 +12,8 @@ from lXtractor.variables.sequential import SeqEl, PFP
 from lXtractor.variables.structural import Dist, PseudoDihedral, Phi, Psi, Chi1, SASA
 from more_itertools import windowed
 
+from kinactive.config import PK_NAME
+
 # CT = t.TypeVar('CT', ChainSequence, ChainStructure)
 CT: t.TypeAlias = ChainSequence | ChainStructure
 VT: t.TypeAlias = SequenceVariable | StructureVariable
@@ -31,6 +33,25 @@ def _make_pfp(ps, n_comp: int = 3):
 
 @dataclass
 class DefaultFeatures:
+    """
+    Default feature set is based on PF00069 Pfam profile positions.
+    It includes:
+
+        #. SASA for each position.
+        #. Pseudo dihedral angles for each consecutive quadruplet.
+        #. Phi angles for each position except the very first one.
+        #. Psi angles for each position except the very last one.
+        #. Chi1 angles for each position.
+        #. Pairwise CB-CB distances between:
+
+            #. $\beta_3$-sheet and $\alpha C$-helix.
+            #. $\beta_3$-sheet and XDFGX region.
+            #. $\alpha C$-helix and XDFGX region.
+
+        #. $DFG_{Phe}-C\zeta$ -- $\alphaC_{Glu+4}-C\alpha$ distance.
+        #. $DFG_{Phe}-C\zeta$ -- $\beta_3_{Lys}-C\alpha$ distance.
+    """
+
     xdfgx: tuple[int, ...] = tuple(range(140, 145))
     b3_sheet: tuple[int, ...] = tuple(range(24, 31))
     ac_helix: tuple[int, ...] = tuple(range(37, 57))
@@ -68,25 +89,27 @@ class DefaultFeatures:
     def calculate_seq_vs(
         self,
         chains: abc.Sequence[ChainSequence],
+        map_name: str = PK_NAME,
         num_proc: int | None = None,
         verbose: bool = True,
     ) -> pd.DataFrame:
-        return calculate_vs(
-            chains, self.make_seq_vs(), num_proc, verbose, map_name='PK',
+        return calculate(
+            chains, self.make_seq_vs(), num_proc, verbose, map_name=map_name
         )
 
     def calculate_str_vs(
         self,
         chains: abc.Sequence[ChainStructure],
+        map_name: str = PK_NAME,
         num_proc: int | None = None,
         verbose: bool = True,
     ) -> pd.DataFrame:
-        return calculate_vs(
-            chains, self.make_str_vs(), num_proc, verbose, map_name='PK',
+        return calculate(
+            chains, self.make_str_vs(), num_proc, verbose, map_name=map_name
         )
 
 
-def calculate_vs(
+def calculate(
     chains: abc.Sequence[CT],
     vs: abc.Sequence[VT],
     num_proc: int | None = None,
@@ -96,8 +119,8 @@ def calculate_vs(
     manager = Manager(verbose=verbose)
     calculator = GenericCalculator(num_proc=num_proc)
     results = manager.calculate(chains, vs, calculator, **kwargs)
-    df = manager.aggregate_from_it(results, replace_errors=False)
-    assert isinstance(df, pd.DataFrame), 'Failed to convert results into a table'
+    df = manager.aggregate_from_it(results, replace_errors=True)
+    # assert isinstance(df, pd.DataFrame), 'Failed to convert results into a table'
     return df
 
 

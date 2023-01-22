@@ -6,6 +6,9 @@ from lXtractor.core.base import SOLVENTS
 from lXtractor.core.exceptions import MissingData
 
 
+PK_NAME = 'PK'
+
+
 @dataclass
 class DBConfig:
     verbose: bool
@@ -23,7 +26,7 @@ class DBConfig:
 
     profile: Path = Path(__file__).parent / 'resources' / 'Pkinase.hmm'
 
-    pk_map_name: str = 'PK'
+    pk_map_name: str = PK_NAME
     pk_min_score: float = 30
     pk_min_seq_domain_size: int = 150
     pk_min_str_domain_size: int = 100
