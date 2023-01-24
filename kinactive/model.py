@@ -219,18 +219,22 @@ def make(
             params=starting_params,
         )
 
-    LOGGER.info('Selecting params 1')
-    model.select_params(df, n_trials_sel_1)
-    LOGGER.info(f'Final params: {model.params}')
+    if n_trials_sel_1 > 0:
+        LOGGER.info(
+            f'Selecting params using full feature set for {n_trials_sel_1} trials'
+        )
+        model.select_params(df, n_trials_sel_1)
+        LOGGER.info(f'Final params: {model.params}')
 
     LOGGER.info('Selecting features')
     kwargs = boruta_kwargs or {}
     model.select_features(df, **kwargs)
     LOGGER.info(f'Selected {len(model.features)} features')
 
-    LOGGER.info('Selecting params 2')
-    model.select_params(df, n_trials_sel_2)
-    LOGGER.info(f'Final params: {model.params}')
+    if n_trials_sel_2 > 0:
+        LOGGER.info('Selecting params 2')
+        model.select_params(df, n_trials_sel_2)
+        LOGGER.info(f'Final params: {model.params}')
 
     cv_score = model.cv(df, n_final_cv)
     LOGGER.info(f'Final CV score: {cv_score}')
