@@ -187,6 +187,12 @@ class KinactiveClassifier(KinactiveModel):
     def score(self, df: pd.DataFrame, **kwargs) -> float:
         y_pred = self.predict(df)
         y_true = np.squeeze(df[self.targets].values)
+        if (
+            len(self.targets) > 1
+            or len(np.bincount(y_true)) > 2
+            and 'average' not in kwargs
+        ):
+            kwargs['average'] = 'micro'
         return f1_score(y_true, y_pred, **kwargs)
 
 
