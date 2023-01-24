@@ -5,23 +5,31 @@ build-backend = "hatchling.build"
 [project]
 name = "kinactive"
 description = 'Protein kinases annotation and feature extraction'
-readme = "README.md"
+readme = "README.rst"
 requires-python = ">=3.10"
 license = "MIT"
 keywords = []
 authors = [
-  { name = "Ivan Reveguk", email = "ivan.reveguk@gmail.com" },
+    { name = "Ivan Reveguk", email = "ivan.reveguk@gmail.com" },
 ]
 classifiers = [
-  "Development Status :: 4 - Beta",
-  "Programming Language :: Python",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: Implementation :: CPython",
-  "Programming Language :: Python :: Implementation :: PyPy",
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dependencies = [
-  "click",
-  "lXtractor"
+    #  "click",
+    "lXtractor",
+    "xgboost",
+    "toolz",
+    "tqdm",
+    "more_itertools",
+    "pandas",
+#    "numpy",
+    "sklearn",
+    "boruta"
 ]
 dynamic = ["version"]
 
@@ -38,8 +46,8 @@ path = "kinactive/__about__.py"
 
 [tool.hatch.envs.test]
 dependencies = [
-  "pytest",
-  "pytest-cov",
+    "pytest",
+    "pytest-cov",
 ]
 [tool.hatch.envs.test.scripts]
 cov = "pytest --cov-report=term-missing --cov-config=pyproject.toml --cov=kinactive --cov=tests {args}"
@@ -52,14 +60,14 @@ python = ["310", "311"]
 branch = true
 parallel = true
 omit = [
-  "kinactive/__about__.py",
+    "kinactive/__about__.py",
 ]
 
 [tool.coverage.report]
 exclude_lines = [
-  "no cov",
-  "if __name__ == .__main__.:",
-  "if TYPE_CHECKING:",
+    "no cov",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
 ]
 
 [tool.mypy]
