@@ -5,7 +5,6 @@ from pathlib import Path
 from lXtractor.core.base import SOLVENTS
 from lXtractor.core.exceptions import MissingData
 
-
 PK_NAME = 'PK'
 
 
@@ -59,6 +58,13 @@ class _DumpNames:
     features_filename: str = 'features.txt'
     targets_filename: str = 'targets.txt'
     params_filename: str = 'params.json'
+
+
+@dataclass
+class _ModelPaths:
+    kinactive_classifier: Path = (
+        Path(__file__).parent / 'resources' / 'models' / 'kinactive_classifier'
+    )
 
 
 if __name__ == '__main__':
