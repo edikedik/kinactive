@@ -50,5 +50,16 @@ class DBConfig:
             raise MissingData(f'Missing PK profile under {self.profile} path')
 
 
+@dataclass
+class _DumpNames:
+    cls_keyword: str = 'classifier'
+    reg_keyword: str = 'regressor'
+
+    model_filename: str = 'model.bin'
+    features_filename: str = 'features.txt'
+    targets_filename: str = 'targets.txt'
+    params_filename: str = 'params.json'
+
+
 if __name__ == '__main__':
     raise RuntimeError

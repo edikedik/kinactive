@@ -1,22 +1,30 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import typing as t
 from abc import abstractmethod
 from collections import abc
+from pathlib import Path
 from statistics import mean
 
 import numpy as np
 import optuna
 import pandas as pd
 from Boruta import Boruta
+from lXtractor.core.exceptions import MissingData
+from lXtractor.util.io import get_files
 from sklearn.metrics import f1_score, r2_score
 from toolz import curry
 from xgboost import XGBClassifier, XGBRegressor
 
+from kinactive.config import _DumpNames
+
 _PDB_PATTERN = re.compile(r'\((\w{4}):\w+\|')
+_X = t.TypeVar('_X', XGBRegressor, XGBClassifier)
 LOGGER = logging.getLogger(__name__)
+DumpNames = _DumpNames()
 
 
 # TODO Boruta: y as df is not supported
@@ -81,8 +89,6 @@ def xgb_objective(
         'colsample_bytree': trial.suggest_float('colsample_bytree', 0.1, 1.0),
         'colsample_bylevel': trial.suggest_float('colsample_bylevel', 0.1, 1.0),
         'scale_pos_weight': trial.suggest_float('scale_pos_weight', 0.0, 10.0),
-        'n_estimators': 100,
-        'n_jobs': -1,
     }
 
     # callback = optuna.integration.XGBoostPruningCallback(trial, 'validation_logloss')
@@ -241,6 +247,98 @@ def make(
     model.train(df)
 
     return model, cv_score
+
+
+def save_txt_lines(lines: abc.Iterable[str], path: Path) -> Path:
+    with path.open('w') as f:
+        for x in lines:
+            print(x, file=f)
+    return path
+
+
+def save_json(data: dict, path: Path) -> Path:
+    with path.open('w') as f:
+        json.dump(data, f)
+    return path
+
+
+def save_xgb(model: XGBClassifier | XGBRegressor, path: Path) -> Path:
+    model.save_model(path)
+    return path
+
+
+def save(
+    kin_model: KinactiveClassifier | KinactiveRegressor,
+    base: Path,
+    name: str,
+    overwrite: bool = False,
+) -> Path:
+    if isinstance(kin_model, KinactiveRegressor):
+        suffix = 'regressor'
+    elif isinstance(kin_model, KinactiveClassifier):
+        suffix = 'classifier'
+    else:
+        raise TypeError(f'Unexpected model type {kin_model.__class__}')
+    path = base / f'{name}_{suffix}'
+    if path.exists() and not overwrite:
+        raise ValueError(
+            f'Model path {path} exists. Set overwrite=True if you want to '
+            'overwrite existing model'
+        )
+    path.mkdir(exist_ok=True, parents=True)
+
+    save_txt_lines(kin_model.targets, path / DumpNames.targets_filename)
+    save_txt_lines(kin_model.features, path / DumpNames.features_filename)
+    save_json(kin_model.params, path / DumpNames.params_filename)
+    save_xgb(kin_model.model, path / DumpNames.model_filename)
+
+    return path
+
+
+def load_txt_lines(path: Path) -> list[str]:
+    return list(filter(bool, path.read_text().split('\n')))
+
+
+def load_json(path: Path) -> dict[str, t.Any]:
+    with path.open() as f:
+        return json.load(f)
+
+
+def load_xgb(path: Path, xgb_model: _X) -> _X:
+    xgb_model.load_model(path)
+    return xgb_model
+
+
+def load(path: Path):
+    if not path.is_dir():
+        raise NotADirectoryError(f'{path} must be dir')
+    name = path.name.lower()
+    if 'classifier' in name:
+        cls = KinactiveClassifier
+        xgb_type = XGBClassifier
+    elif 'regressor' in name:
+        cls = KinactiveRegressor
+        xgb_type = XGBRegressor
+    else:
+        raise NameError(
+            'Directory name must contain either "regressor" or "classifier"'
+        )
+    files = get_files(path)
+    expected_names = [
+        DumpNames.model_filename,
+        DumpNames.features_filename,
+        DumpNames.params_filename,
+    ]
+    for name in expected_names:
+        if name not in files:
+            raise MissingData(f'Missing required file "{name}" in {path}')
+
+    targets = load_txt_lines(files[DumpNames.targets_filename])
+    features = load_txt_lines(files[DumpNames.features_filename])
+    params = load_json(files[DumpNames.params_filename])
+    xgb_model = load_xgb(files[DumpNames.model_filename], xgb_type())
+
+    return cls(xgb_model, targets, features, params)
 
 
 if __name__ == '__main__':

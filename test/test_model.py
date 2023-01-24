@@ -1,8 +1,13 @@
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
 import pandas as pd
 import pytest
+from lXtractor.util.io import get_dirs
 from sklearn.datasets import make_classification, make_regression
+from xgboost import XGBClassifier, XGBRegressor
 
-from kinactive.model import make, KinactiveRegressor, KinactiveClassifier
+from kinactive.model import make, KinactiveRegressor, KinactiveClassifier, save, load
 
 
 @pytest.fixture
@@ -25,7 +30,7 @@ def make_data(reg: bool = False, **kwargs) -> pd.DataFrame:
     return df
 
 
-@pytest.mark.parametrize('num_targets', [2])
+@pytest.mark.parametrize('num_targets', [2, 3])
 @pytest.mark.parametrize('is_reg', [False, True])
 @pytest.mark.parametrize('starting_params', [{}, {'n_estimators': 20}])
 def test_make(num_targets, is_reg, starting_params):
@@ -58,3 +63,34 @@ def test_make(num_targets, is_reg, starting_params):
     assert score != 0
     assert 0 < len(model.features) < df.shape[1]
     assert len(model.params) > 0
+
+
+@pytest.mark.parametrize('is_cls', [True, False])
+@pytest.mark.parametrize('params', [{}, {'n_estimators': 5}])
+def test_io(is_cls, params):
+    df = make_data(not is_cls)
+    targets = [c for c in df.columns if c.startswith('Y')]
+    features = [c for c in df.columns if c.startswith('X')]
+
+    if is_cls:
+        model = KinactiveClassifier(XGBClassifier(), targets, features, params)
+        suffix = 'classifier'
+    else:
+        model = KinactiveRegressor(XGBRegressor(), targets, features, params)
+        suffix = 'regressor'
+
+    model.train(df)
+
+    with TemporaryDirectory() as tmp_dir:
+        tmp_dir = Path(tmp_dir)
+
+        save(model, tmp_dir, 'test')
+        dirs = get_dirs(tmp_dir)
+        dump_name = f'test_{suffix}'
+        assert dump_name in dirs
+
+        model_ = load(tmp_dir / dump_name)
+        assert isinstance(model_.model, (XGBRegressor, XGBClassifier))
+        assert model.features == model_.features
+        assert model.params == model_.params
+        assert model.targets == model_.targets
