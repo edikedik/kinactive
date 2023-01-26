@@ -46,9 +46,10 @@ def test_make(num_targets, is_reg, starting_params):
 
     target_names = [c for c in df.columns if c.startswith('Y')]
 
-    model, score = make(
+    model, score, df = make(
         df,
         target_names,
+        [],
         starting_params,
         boruta_kwargs=dict(test_stratify=False, use_test=False),
         classifier=not is_reg,
@@ -64,6 +65,7 @@ def test_make(num_targets, is_reg, starting_params):
     assert score != 0
     assert 0 < len(model.features) < df.shape[1]
     assert len(model.params) > 0
+    assert {f'{c}_pred' for c in target_names} == {c for c in df.columns if 'pred' in c}
 
 
 @pytest.mark.parametrize('is_cls', [True, False])

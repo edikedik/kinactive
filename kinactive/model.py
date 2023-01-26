@@ -172,7 +172,7 @@ class KinactiveModel:
         raise NotImplementedError
 
     def cv(self, df: pd.DataFrame, n: int, verbose: bool = False) -> float:
-        idx_gen = _generate_fold_idx(df['ObjectID'].map(_get_unique_group).values, n)
+        idx_gen = self.generate_fold_idx(df, n)
         scores = []
         for train_idx, test_idx in idx_gen:
             self.reinit_model()
@@ -185,6 +185,31 @@ class KinactiveModel:
         else:
             LOGGER.debug(msg)
         return score
+
+    def cv_pred(
+        self, df: pd.DataFrame, n: int, verbose: bool = False
+    ) -> tuple[float, pd.DataFrame]:
+        df = df.copy()
+        idx_gen = self.generate_fold_idx(df, n)
+        scores = []
+        for fold_i, (train_idx, test_idx) in enumerate(idx_gen, start=1):
+            self.reinit_model()
+            self.train(df[train_idx])
+            scores.append(self.score(df[test_idx]))
+            y_pred = self.predict(df[test_idx])
+            if len(self.targets) == 1:
+                df.loc[test_idx, f'{self.targets[0]}_pred'] = y_pred
+            else:
+                for i, col in enumerate(self.targets):
+                    df.loc[test_idx, f'{col}_pred'] = y_pred[:, i]
+            df.loc[test_idx, 'Fold_i'] = fold_i
+        score = mean(scores)
+        msg = f'Scores: {scores}; mean={score}'
+        if verbose:
+            LOGGER.info(msg)
+        else:
+            LOGGER.debug(msg)
+        return score, df
 
     def select_params(
         self, df: pd.DataFrame, n_trials: int, direction: str = 'maximize'
@@ -210,7 +235,8 @@ class KinactiveClassifier(KinactiveModel):
     ) -> abc.Iterator[tuple[np.ndarray, np.ndarray]]:
         splitter = StratifiedShuffleSplit(n_splits=n, test_size=1 / n)
         x, y = _get_xy(df, self.features, self.targets)
-        yield from splitter.split(x, y)
+        for train_idx, test_idx in splitter.split(x, y):
+            yield df.index.isin(train_idx), df.index.isin(test_idx)
 
     def predict_proba(self, df: pd.DataFrame) -> np.ndarray:
         df = _apply_selection(df, self.features)
@@ -284,7 +310,7 @@ def make(
     n_trials_sel_2: int = 50,
     n_final_cv: int = 10,
     boruta_kwargs: dict[str, t.Any] | None = None,
-) -> tuple[KinactiveClassifier | KinactiveRegressor, float]:
+) -> tuple[KinactiveClassifier | KinactiveRegressor, float, pd.DataFrame]:
     taken_names = ['ObjectID', *targets]
     features = features or [c for c in df.columns if c not in taken_names]
 
@@ -320,11 +346,11 @@ def make(
         model.select_params(df, n_trials_sel_2)
         LOGGER.info(f'Final params: {model.params}')
 
-    cv_score = model.cv(df, n_final_cv)
+    cv_score, df_pred = model.cv_pred(df, n_final_cv, verbose=True)
     LOGGER.info(f'Final CV score: {cv_score}')
     model.train(df)
 
-    return model, cv_score
+    return model, cv_score, df_pred
 
 
 if __name__ == '__main__':
