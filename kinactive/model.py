@@ -206,6 +206,7 @@ class KinactiveRegressor(KinactiveModel):
 def make(
     df: pd.DataFrame,
     targets: list[str],
+    features: list[str],
     starting_params: dict[str, t.Any],
     classifier: bool = True,
     n_trials_sel_1: int = 50,
@@ -214,7 +215,7 @@ def make(
     boruta_kwargs: dict[str, t.Any] | None = None,
 ) -> tuple[KinactiveClassifier | KinactiveRegressor, float]:
     taken_names = ['ObjectID', *targets]
-    features = [c for c in df.columns if c not in taken_names]
+    features = features or [c for c in df.columns if c not in taken_names]
 
     if classifier:
         model = KinactiveClassifier(
