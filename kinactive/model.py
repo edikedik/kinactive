@@ -97,23 +97,24 @@ def _get_xy(
 
 @curry
 def xgb_objective(
-    trial: optuna.Trial, df: pd.DataFrame, model: KinactiveModel
+    trial: optuna.Trial, df: pd.DataFrame, model: KinactiveModel, n_cv: int = 5
 ) -> float:
     params = {
-        'learning_rate': trial.suggest_float('learning_rate', 0.001, 1),
+        'learning_rate': trial.suggest_float('learning_rate', 0, 1),
         'max_depth': trial.suggest_int('max_depth', 4, 16),
         'gamma': trial.suggest_float('gamma', 0, 20.0),
-        'reg_lambda': trial.suggest_float('reg_lambda', 0.01, 10.0),
-        'reg_alpha': trial.suggest_float('reg_alpha', 0.01, 10.0),
-        'colsample_bytree': trial.suggest_float('colsample_bytree', 0.1, 1.0),
-        'colsample_bylevel': trial.suggest_float('colsample_bylevel', 0.1, 1.0),
-        'scale_pos_weight': trial.suggest_float('scale_pos_weight', 0.0, 10.0),
+        'reg_lambda': trial.suggest_float('reg_lambda', 0, 10.0),
+        'reg_alpha': trial.suggest_float('reg_alpha', 0, 10.0),
+        'colsample_bytree': trial.suggest_float('colsample_bytree', 0.4, 1.0),
+        'colsample_bylevel': trial.suggest_float('colsample_bylevel', 0.4, 1.0),
     }
+    if isinstance(KinactiveModel, KinactiveClassifier):
+        params['scale_pos_weight'] = trial.suggest_float('scale_pos_weight', 0.0, 10.0)
 
     # callback = optuna.integration.XGBoostPruningCallback(trial, 'validation_logloss')
     params = {**model.params, **params}
     model = model.__class__(model.model, model.targets, model.features, params)
-    score = model.cv(df, 5)
+    score = model.cv(df, n_cv)
     return score
 
 
