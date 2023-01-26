@@ -59,6 +59,11 @@ class _DumpNames:
     targets_filename: str = 'targets.txt'
     params_filename: str = 'params.json'
 
+    in_model_dirname: str = 'in'
+    out_model_dirname: str = 'out'
+    inter_model_dirname: str = 'inter'
+    meta_model_dirname: str = 'meta'
+
 
 @dataclass
 class _ModelPaths:

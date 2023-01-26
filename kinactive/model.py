@@ -1,30 +1,23 @@
 from __future__ import annotations
 
-import json
 import logging
 import re
 import typing as t
 from abc import abstractmethod
 from collections import abc
-from pathlib import Path
 from statistics import mean
 
 import numpy as np
 import optuna
 import pandas as pd
 from Boruta import Boruta
-from lXtractor.core.exceptions import MissingData
-from lXtractor.util.io import get_files
 from sklearn.metrics import f1_score, r2_score
+from sklearn.model_selection import StratifiedShuffleSplit
 from toolz import curry
 from xgboost import XGBClassifier, XGBRegressor
 
-from kinactive.config import _DumpNames
-
 _PDB_PATTERN = re.compile(r'\((\w{4}):\w+\|')
-_X = t.TypeVar('_X', XGBRegressor, XGBClassifier)
 LOGGER = logging.getLogger(__name__)
-DumpNames = _DumpNames()
 
 
 # TODO Boruta: y as df is not supported
@@ -39,7 +32,7 @@ def _apply_selection(df: pd.DataFrame, features: list[str]):
 
 def _generate_fold_idx(
     obj_ids: np.ndarray, n_folds: int
-) -> tuple[np.ndarray, np.ndarray]:
+) -> abc.Generator[tuple[np.ndarray, np.ndarray], None, None]:
     ids_original = obj_ids.copy()
     ids = np.unique(obj_ids)
     np.random.shuffle(ids)
@@ -49,6 +42,32 @@ def _generate_fold_idx(
         chunk_train = np.concatenate([x for j, x in enumerate(chunks) if j != i])
         idx_test = np.isin(ids_original, chunk_test)
         idx_train = np.isin(ids_original, chunk_train)
+        yield idx_train, idx_test
+
+
+def _generate_stratified_fold_idx(
+    obj_ids: np.ndarray | abc.Sequence[str],
+    target: np.ndarray | abc.Sequence[str],
+    n_folds: int,
+):
+    def concat_ith(a: abc.Sequence[np.ndarray], i: int) -> np.ndarray:
+        return np.concatenate([c[i] for c in a])
+
+    df = pd.DataFrame({'ObjectID': obj_ids, 'Target': target})
+    df_unique = df.drop_duplicates().sample(frac=1)
+    class_chunks = []
+    for _, gg in df_unique.groupby(target):
+        uniq_objects = gg['ObjectID'].unique()
+        class_chunks.append(np.array_split(uniq_objects, n_folds))
+    print('\n', *class_chunks, sep='\n', end='\n\n')
+    for i in range(n_folds):
+        chunk_test = concat_ith(class_chunks, i)
+        chunk_train = np.concatenate(
+            [concat_ith(class_chunks, j) for j in range(n_folds) if i != j]
+        )
+        chunk_test = np.setdiff1d(chunk_test, chunk_train)
+        idx_test = df['ObjectID'].isin(chunk_test)
+        idx_train = df['ObjectID'].isin(chunk_train)
         yield idx_train, idx_test
 
 
@@ -146,6 +165,12 @@ class KinactiveModel:
     def score(self, df: pd.DataFrame):
         raise NotImplementedError
 
+    @abstractmethod
+    def generate_fold_idx(
+        self, df: pd.DataFrame, n: int
+    ) -> abc.Iterator[tuple[np.ndarray, np.ndarray]]:
+        raise NotImplementedError
+
     def cv(self, df: pd.DataFrame, n: int, verbose: bool = False) -> float:
         idx_gen = _generate_fold_idx(df['ObjectID'].map(_get_unique_group).values, n)
         scores = []
@@ -180,7 +205,14 @@ class KinactiveModel:
 
 
 class KinactiveClassifier(KinactiveModel):
-    def predict_proba(self, df: pd.DataFrame):
+    def generate_fold_idx(
+        self, df: pd.DataFrame, n: int
+    ) -> abc.Iterator[tuple[np.ndarray, np.ndarray]]:
+        splitter = StratifiedShuffleSplit(n_splits=n, test_size=1 / n)
+        x, y = _get_xy(df, self.features, self.targets)
+        yield from splitter.split(x, y)
+
+    def predict_proba(self, df: pd.DataFrame) -> np.ndarray:
         df = _apply_selection(df, self.features)
         return self._model.predict_proba(df.values)
 
@@ -190,6 +222,7 @@ class KinactiveClassifier(KinactiveModel):
         if (
             len(self.targets) > 1
             or len(np.bincount(y_true)) > 2
+            or len(np.bincount(y_pred)) > 2
             and 'average' not in kwargs
         ):
             kwargs['average'] = 'micro'
@@ -197,10 +230,48 @@ class KinactiveClassifier(KinactiveModel):
 
 
 class KinactiveRegressor(KinactiveModel):
+    def generate_fold_idx(
+        self, df: pd.DataFrame, n: int
+    ) -> abc.Iterator[tuple[np.ndarray, np.ndarray]]:
+        return _generate_fold_idx(df['ObjectID'].map(_get_unique_group).values, n)
+
     def score(self, df: pd.DataFrame, **kwargs) -> float:
         y_pred = self.predict(df)
         y_true = np.squeeze(df[self.targets].values)
         return r2_score(y_true, y_pred, **kwargs)
+
+
+DFGModels = t.NamedTuple(
+    'DFGModels',
+    [
+        ('in_', KinactiveClassifier),
+        ('out', KinactiveClassifier),
+        ('inter', KinactiveClassifier),
+        ('meta', KinactiveClassifier),
+    ],
+)
+
+
+class DFGClassifier:
+    def __init__(
+        self,
+        in_model: KinactiveClassifier,
+        out_model: KinactiveClassifier,
+        inter_model: KinactiveClassifier,
+        meta_model: KinactiveClassifier,
+    ):
+        self.models = DFGModels(in_model, out_model, inter_model, meta_model)
+
+    def predict(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = df.copy()
+        df['in_proba'] = self.models.in_.predict_proba(df)
+        df['out_proba'] = self.models.out.predict_proba(df)
+        df['inter_proba'] = self.models.inter.predict_proba(df)
+        y_prob = self.models.meta.predict_proba(df).round(2)
+        for i, label in enumerate(['in', 'out', 'inter']):
+            df[f'{label}_proba_meta'] = y_prob[:, i]
+        df['DFG_pred'] = np.argmax(y_prob, axis=1)
+        return df
 
 
 def make(
@@ -254,98 +325,6 @@ def make(
     model.train(df)
 
     return model, cv_score
-
-
-def save_txt_lines(lines: abc.Iterable[str], path: Path) -> Path:
-    with path.open('w') as f:
-        for x in lines:
-            print(x, file=f)
-    return path
-
-
-def save_json(data: dict, path: Path) -> Path:
-    with path.open('w') as f:
-        json.dump(data, f)
-    return path
-
-
-def save_xgb(model: XGBClassifier | XGBRegressor, path: Path) -> Path:
-    model.save_model(path)
-    return path
-
-
-def save(
-    kin_model: KinactiveClassifier | KinactiveRegressor,
-    base: Path,
-    name: str,
-    overwrite: bool = False,
-) -> Path:
-    if isinstance(kin_model, KinactiveRegressor):
-        suffix = 'regressor'
-    elif isinstance(kin_model, KinactiveClassifier):
-        suffix = 'classifier'
-    else:
-        raise TypeError(f'Unexpected model type {kin_model.__class__}')
-    path = base / f'{name}_{suffix}'
-    if path.exists() and not overwrite:
-        raise ValueError(
-            f'Model path {path} exists. Set overwrite=True if you want to '
-            'overwrite existing model'
-        )
-    path.mkdir(exist_ok=True, parents=True)
-
-    save_txt_lines(kin_model.targets, path / DumpNames.targets_filename)
-    save_txt_lines(kin_model.features, path / DumpNames.features_filename)
-    save_json(kin_model.params, path / DumpNames.params_filename)
-    save_xgb(kin_model.model, path / DumpNames.model_filename)
-
-    return path
-
-
-def load_txt_lines(path: Path) -> list[str]:
-    return list(filter(bool, path.read_text().split('\n')))
-
-
-def load_json(path: Path) -> dict[str, t.Any]:
-    with path.open() as f:
-        return json.load(f)
-
-
-def load_xgb(path: Path, xgb_model: _X) -> _X:
-    xgb_model.load_model(path)
-    return xgb_model
-
-
-def load(path: Path):
-    if not path.is_dir():
-        raise NotADirectoryError(f'{path} must be dir')
-    name = path.name.lower()
-    if 'classifier' in name:
-        cls = KinactiveClassifier
-        xgb_type = XGBClassifier
-    elif 'regressor' in name:
-        cls = KinactiveRegressor
-        xgb_type = XGBRegressor
-    else:
-        raise NameError(
-            'Directory name must contain either "regressor" or "classifier"'
-        )
-    files = get_files(path)
-    expected_names = [
-        DumpNames.model_filename,
-        DumpNames.features_filename,
-        DumpNames.params_filename,
-    ]
-    for name in expected_names:
-        if name not in files:
-            raise MissingData(f'Missing required file "{name}" in {path}')
-
-    targets = load_txt_lines(files[DumpNames.targets_filename])
-    features = load_txt_lines(files[DumpNames.features_filename])
-    params = load_json(files[DumpNames.params_filename])
-    xgb_model = load_xgb(files[DumpNames.model_filename], xgb_type())
-
-    return cls(xgb_model, targets, features, params)
 
 
 if __name__ == '__main__':

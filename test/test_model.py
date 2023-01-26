@@ -7,7 +7,8 @@ from lXtractor.util.io import get_dirs
 from sklearn.datasets import make_classification, make_regression
 from xgboost import XGBClassifier, XGBRegressor
 
-from kinactive.model import make, KinactiveRegressor, KinactiveClassifier, save, load
+from kinactive.io import save, load
+from kinactive.model import make, KinactiveRegressor, KinactiveClassifier
 
 
 @pytest.fixture

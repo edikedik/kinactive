@@ -33,6 +33,13 @@ CT_: t.TypeAlias = Chain | ChainSequence | ChainStructure
 LOGGER = logging.getLogger(__name__)
 
 
+# TODO: some object IDs are duplicated:
+# ['ChainStructure(PK_1|10-260<-(5UFU:A|1-375))',
+#  'ChainStructure(PK_1|136-354<-(7APJ:A|1-385))',
+#  'ChainStructure(PK_1|38-323<-(3U87:A|1-334))',
+#  'ChainStructure(PK_1|38-323<-(3U87:B|1-334))']
+
+
 def _get_remaining(names: abc.Iterable[str], dir_: Path) -> set[str]:
     existing = {x.stem for x in get_files(dir_).values()}
     return set(names) - existing
