@@ -45,7 +45,7 @@ def save_dfg(
 
 
 def save(
-    model: KinactiveClassifier | KinactiveRegressor,
+    model: KinactiveClassifier | KinactiveRegressor | DFGClassifier,
     base: Path,
     name: str,
     overwrite: bool = False,
