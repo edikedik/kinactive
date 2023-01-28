@@ -8,7 +8,12 @@ from sklearn.datasets import make_classification, make_regression
 from xgboost import XGBClassifier, XGBRegressor
 
 from kinactive.io import save, load
-from kinactive.model import make, KinactiveRegressor, KinactiveClassifier
+from kinactive.model import (
+    make,
+    KinactiveRegressor,
+    KinactiveClassifier,
+    _generate_stratified_fold_idx,
+)
 
 
 @pytest.fixture
@@ -97,3 +102,41 @@ def test_io(is_cls, params):
         assert model.features == model_.features
         assert model.params == model_.params
         assert model.targets == model_.targets
+
+
+def _get_0_frac(df: pd.DataFrame, col: str = 'Y_1') -> float:
+    return (df[col] == 0).sum() / len(df)
+
+
+@pytest.mark.parametrize('n_classes', [2, 3, 4])
+@pytest.mark.parametrize('w0', [0.2, 0.3, 0.4])
+@pytest.mark.parametrize('n_folds', [3, 5, 10])
+@pytest.mark.parametrize('n_samples', [100, 200, 300])
+@pytest.mark.parametrize('n_features', [20])
+def test_stratified_fold_index_gen(n_classes, w0, n_folds, n_samples, n_features):
+    n_left = n_classes - 1
+    w_others = (1 - w0) / n_left
+    ws = [w0, *(w_others for _ in range(n_left))]
+    assert abs(1 - sum(ws)) < 0.001
+    df = make_data(
+        n_samples=n_samples,
+        n_features=n_features,
+        n_informative=10,
+        n_classes=n_classes,
+        weights=ws,
+    )
+    assert df.shape == (n_samples, n_features + 2)
+
+    actual0_frac = _get_0_frac(df)
+
+    gen_idx = list(
+        _generate_stratified_fold_idx(df['ObjectID'].values, df['Y_1'].values, n_folds)
+    )
+    assert len(gen_idx) == n_folds
+    for train_idx, test_idx in gen_idx:
+        train_fold, test_fold = df[train_idx], df[test_idx]
+        assert len(train_fold) + len(test_fold) == len(df)
+        w0_test_frac = _get_0_frac(test_fold)
+        w0_train_frac = _get_0_frac(train_fold)
+        assert abs(actual0_frac - w0_train_frac) < 0.1
+        assert abs(actual0_frac - w0_test_frac) < 0.1

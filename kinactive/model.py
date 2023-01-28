@@ -12,7 +12,6 @@ import optuna
 import pandas as pd
 from Boruta import Boruta
 from sklearn.metrics import f1_score, r2_score
-from sklearn.model_selection import StratifiedShuffleSplit
 from toolz import curry
 from xgboost import XGBClassifier, XGBRegressor
 
@@ -30,44 +29,42 @@ def _apply_selection(df: pd.DataFrame, features: list[str]):
     return df[features]
 
 
-def _generate_fold_idx(
-    obj_ids: np.ndarray, n_folds: int
+def _generate_fold_chunks(
+        obj_ids: np.ndarray, n_folds: int
 ) -> abc.Generator[tuple[np.ndarray, np.ndarray], None, None]:
-    ids_original = obj_ids.copy()
     ids = np.unique(obj_ids)
     np.random.shuffle(ids)
     chunks = np.array_split(ids, n_folds)
     for i in range(n_folds):
         chunk_test = chunks[i]
         chunk_train = np.concatenate([x for j, x in enumerate(chunks) if j != i])
-        idx_test = np.isin(ids_original, chunk_test)
-        idx_train = np.isin(ids_original, chunk_train)
+        yield chunk_train, chunk_test
+
+
+def _generate_fold_idx(
+    obj_ids: np.ndarray, n_folds: int
+) -> abc.Generator[tuple[np.ndarray, np.ndarray], None, None]:
+    for train_chunk, test_chunk in _generate_fold_chunks(obj_ids, n_folds):
+        idx_test = np.isin(obj_ids, test_chunk)
+        idx_train = np.isin(obj_ids, train_chunk)
         yield idx_train, idx_test
 
 
 def _generate_stratified_fold_idx(
-    obj_ids: np.ndarray | abc.Sequence[str],
-    target: np.ndarray | abc.Sequence[str],
+    obj_ids: abc.Sequence[abc.Hashable],
+    target: abc.Sequence[abc.Hashable],
     n_folds: int,
 ):
-    def concat_ith(a: abc.Sequence[np.ndarray], i: int) -> np.ndarray:
-        return np.concatenate([c[i] for c in a])
-
     df = pd.DataFrame({'ObjectID': obj_ids, 'Target': target})
-    df_unique = df.drop_duplicates().sample(frac=1)
-    class_chunks = []
-    for _, gg in df_unique.groupby(target):
-        uniq_objects = gg['ObjectID'].unique()
-        class_chunks.append(np.array_split(uniq_objects, n_folds))
-    print('\n', *class_chunks, sep='\n', end='\n\n')
-    for i in range(n_folds):
-        chunk_test = concat_ith(class_chunks, i)
-        chunk_train = np.concatenate(
-            [concat_ith(class_chunks, j) for j in range(n_folds) if i != j]
-        )
-        chunk_test = np.setdiff1d(chunk_test, chunk_train)
-        idx_test = df['ObjectID'].isin(chunk_test)
-        idx_train = df['ObjectID'].isin(chunk_train)
+    groups = [
+        _generate_fold_chunks(gg['ObjectID'], n_folds) for _, gg in df.groupby('Target')
+    ]
+    for id_pairs in map(list, zip(*groups)):
+        ids_train = np.concatenate([x[0] for x in id_pairs])
+        ids_test = np.concatenate([x[1] for x in id_pairs])
+        idx_train = np.isin(obj_ids, ids_train)
+        idx_test = np.isin(obj_ids, ids_test)
+
         yield idx_train, idx_test
 
 
@@ -234,10 +231,11 @@ class KinactiveClassifier(KinactiveModel):
     def generate_fold_idx(
         self, df: pd.DataFrame, n: int
     ) -> abc.Iterator[tuple[np.ndarray, np.ndarray]]:
-        splitter = StratifiedShuffleSplit(n_splits=n, test_size=1 / n)
-        x, y = _get_xy(df, self.features, self.targets)
-        for train_idx, test_idx in splitter.split(x, y):
-            yield df.index.isin(train_idx), df.index.isin(test_idx)
+        return _generate_stratified_fold_idx(
+            df['ObjectID'].values,
+            np.squeeze(df[self.targets].values),
+            n
+        )
 
     def predict_proba(self, df: pd.DataFrame) -> np.ndarray:
         df = _apply_selection(df, self.features)
