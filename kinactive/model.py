@@ -278,13 +278,11 @@ class EarlyStoppingCallback(object):
 
     def __init__(self, early_stopping_rounds: int, direction: str = "minimize") -> None:
         self.early_stopping_rounds = early_stopping_rounds
-
         self._iter = 0
-
         if direction == "minimize":
             self._operator = op.lt
             self._score = np.inf
-        elif direction == "maximize":
+        if direction == "maximize":
             self._operator = op.gt
             self._score = -np.inf
         else:
@@ -298,6 +296,9 @@ class EarlyStoppingCallback(object):
             self._iter += 1
 
         if self._iter >= self.early_stopping_rounds:
+            LOGGER.info(
+                f'Stopping optimization at max iter {self.early_stopping_rounds}'
+            )
             study.stop()
 
 
