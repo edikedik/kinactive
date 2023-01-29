@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import typing as t
-from abc import abstractmethod
+from abc import ABCMeta, abstractmethod
 from collections import abc
 from statistics import mean
 
@@ -15,12 +15,238 @@ from sklearn.metrics import f1_score, r2_score
 from toolz import curry
 from xgboost import XGBClassifier, XGBRegressor
 
+from kinactive.config import ColNames, DFG_MAP_REV
+
 _PDB_PATTERN = re.compile(r'\((\w{4}):\w+\|')
 LOGGER = logging.getLogger(__name__)
 
 
 # TODO Boruta: y as df is not supported
 # TODO Boruta: explicit support for regressors (with use_test=True)
+
+
+class ModelBase(metaclass=ABCMeta):
+    @property
+    @abstractmethod
+    def targets(self) -> abc.Sequence[str]:
+        ...
+
+    @abstractmethod
+    def reinit_model(self):
+        ...
+
+    @abstractmethod
+    def train(self, df: pd.DataFrame):
+        ...
+
+    @abstractmethod
+    def predict(self, df: pd.DataFrame):
+        ...
+
+    @abstractmethod
+    def cv(self, df: pd.DataFrame, n: int):
+        ...
+
+    @abstractmethod
+    def generate_fold_idx(
+        self, df: pd.DataFrame, n: int
+    ) -> abc.Iterator[tuple[np.ndarray, np.ndarray]]:
+        ...
+
+    @abstractmethod
+    def score(self, df: pd.DataFrame) -> float:
+        ...
+
+
+class KinactiveModel(ModelBase, metaclass=ABCMeta):
+    def __init__(
+        self,
+        model,
+        targets: abc.Iterable[str],
+        features: abc.Iterable[str] = (),
+        params: dict[str, t.Any] | None = None,
+    ):
+        if not isinstance(features, list):
+            features = list(features)
+        if not isinstance(targets, list):
+            targets = list(targets)
+        self._features = features
+        self._targets = targets
+        self._model = model
+        self.params = params or {}
+
+    @property
+    def model(self):
+        return self._model
+
+    @property
+    def features(self) -> list[str]:
+        return self._features
+
+    @property
+    def targets(self) -> list[str]:
+        return self._targets
+
+    def reinit_model(self):
+        if isinstance(self.model, type):
+            self._model = self._model(**self.params)
+        else:
+            self._model = self._model.__class__(**self.params)
+
+    def train(self, df: pd.DataFrame):
+        df, ys = _get_xy(df, self.features, self.targets)
+        assert ys is not None, f'failed finding target variables {self.targets}'
+        self._model.fit(df.values, np.squeeze(ys.values))
+
+    def predict(self, df: pd.DataFrame):
+        df = _apply_selection(df, self.features)
+        return self._model.predict(df.values)
+
+    def cv(self, df: pd.DataFrame, n: int, verbose: bool = False) -> float:
+        return _cross_validate(self, df, n, verbose)
+
+    def cv_pred(
+        self, df: pd.DataFrame, n: int, verbose: bool = False
+    ) -> tuple[float, pd.DataFrame]:
+        return _cross_validate_and_predict(self, df, n, verbose)
+
+    def select_params(
+        self, df: pd.DataFrame, n_trials: int, direction: str = 'maximize'
+    ) -> optuna.Study:
+        objective = xgb_objective(df=df, model=self)
+        study = optuna.create_study(direction=direction)
+        study.optimize(objective, n_trials=n_trials)
+        self.params = study.best_params
+        return study
+
+    def select_features(self, df: pd.DataFrame, **kwargs) -> Boruta:
+        boruta = Boruta(**kwargs)
+        df_x, df_y = _get_xy(df, self.features, self.targets)
+        assert df_y is not None
+        res = boruta.fit(df_x, np.squeeze(df_y.values), model=self.model)
+        self._features = list(res.features_.accepted)
+        return res
+
+
+class KinactiveClassifier(KinactiveModel):
+    def generate_fold_idx(
+        self, df: pd.DataFrame, n: int
+    ) -> abc.Iterator[tuple[np.ndarray, np.ndarray]]:
+        return _generate_stratified_fold_idx(
+            df['ObjectID'].values, np.squeeze(df[self.targets].values), n
+        )
+
+    def predict_proba(self, df: pd.DataFrame) -> np.ndarray:
+        df = _apply_selection(df, self.features)
+        return self._model.predict_proba(df.values)
+
+    def score(self, df: pd.DataFrame, **kwargs) -> float:
+        y_pred = self.predict(df)
+        y_true = np.squeeze(df[self.targets].values)
+        if (
+            len(self.targets) > 1
+            or len(np.bincount(y_true)) > 2
+            or len(np.bincount(y_pred)) > 2
+            and 'average' not in kwargs
+        ):
+            kwargs['average'] = 'micro'
+        return f1_score(y_true, y_pred, **kwargs)
+
+
+class KinactiveRegressor(KinactiveModel):
+    def generate_fold_idx(
+        self, df: pd.DataFrame, n: int
+    ) -> abc.Iterator[tuple[np.ndarray, np.ndarray]]:
+        return _generate_fold_idx(df['ObjectID'].map(_get_unique_group).values, n)
+
+    def score(self, df: pd.DataFrame, **kwargs) -> float:
+        y_pred = self.predict(df)
+        y_true = np.squeeze(df[self.targets].values)
+        return r2_score(y_true, y_pred, **kwargs)
+
+
+DFGModels = t.NamedTuple(
+    'DFGModels',
+    [
+        ('in_', KinactiveClassifier),
+        ('out', KinactiveClassifier),
+        ('inter', KinactiveClassifier),
+        ('meta', KinactiveClassifier),
+    ],
+)
+
+
+class DFGClassifier(ModelBase):
+    def __init__(
+        self,
+        in_model: KinactiveClassifier,
+        out_model: KinactiveClassifier,
+        inter_model: KinactiveClassifier,
+        meta_model: KinactiveClassifier,
+    ):
+        self.models = DFGModels(in_model, out_model, inter_model, meta_model)
+
+    @property
+    def targets(self) -> list[str]:
+        return [ColNames.dfg_cls]
+
+    def reinit_model(self):
+        for m in self.models:
+            m.reinit_model()
+
+    def _predict_no_meta(
+        self, df: pd.DataFrame
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        return (
+            self.models.in_.predict_proba(df)[:, 1],
+            self.models.out.predict_proba(df)[:, 1],
+            self.models.inter.predict_proba(df)[:, 1],
+        )
+
+    def train(self, df: pd.DataFrame):
+        self.models.in_.train(df)
+        self.models.out.train(df)
+        self.models.inter.train(df)
+        df_pred = df.copy()
+        pred = self._predict_no_meta(df)
+        for c, p in zip(ColNames.dfg_proba_cols, pred):
+            df_pred[c] = p
+        self.models.meta.train(df)
+
+    def predict_full(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = df.copy()
+        pred = self._predict_no_meta(df)
+        for c, p in zip(ColNames.dfg_proba_cols, pred):
+            df[c] = p
+        y_prob = self.models.meta.predict_proba(df).round(2)
+        for i, c in enumerate(ColNames.dfg_meta_proba_cols):
+            df[c] = y_prob[:, i]
+        df[ColNames.dfg_cls_pred] = np.argmax(y_prob, axis=1)
+        df[ColNames.dfg_pred] = df[ColNames.dfg_cls_pred].map(DFG_MAP_REV)
+        return df
+
+    def predict(self, df: pd.DataFrame) -> np.ndarray:
+        return self.predict_full(df)[ColNames.dfg_cls_pred].values
+
+    def score(self, df: pd.DataFrame, **kwargs):
+        y_true = df[ColNames.dfg_cls].values
+        y_pred = self.predict(df)
+        if 'average' not in kwargs:
+            kwargs['average'] = 'micro'
+        return f1_score(y_true, y_pred, **kwargs)
+
+    def generate_fold_idx(
+        self, df: pd.DataFrame, n: int
+    ) -> abc.Iterator[tuple[np.ndarray, np.ndarray]]:
+        return _generate_stratified_fold_idx(
+            df['ObjectID'].values, np.squeeze(df[self.targets].values), n
+        )
+
+    def cv(self, df: pd.DataFrame, n: int, verbose: bool = True):
+        return _cross_validate(self, df, n, verbose)
+
+    def cv_pred(self, df: pd.DataFrame, n: int, verbose: bool = True):
+        return _cross_validate_and_predict(self, df, n, verbose)
 
 
 def _apply_selection(df: pd.DataFrame, features: list[str]):
@@ -30,7 +256,7 @@ def _apply_selection(df: pd.DataFrame, features: list[str]):
 
 
 def _generate_fold_chunks(
-        obj_ids: np.ndarray, n_folds: int
+    obj_ids: np.ndarray, n_folds: int
 ) -> abc.Generator[tuple[np.ndarray, np.ndarray], None, None]:
     ids = np.unique(obj_ids)
     np.random.shuffle(ids)
@@ -92,6 +318,56 @@ def _get_xy(
     return df, ys
 
 
+def _cross_validate(
+    model: KinactiveModel | DFGClassifier,
+    df: pd.DataFrame,
+    n: int,
+    verbose: bool = False,
+) -> float:
+    idx_gen = model.generate_fold_idx(df, n)
+    scores = []
+    for train_idx, test_idx in idx_gen:
+        model.reinit_model()
+        model.train(df[train_idx])
+        scores.append(model.score(df[test_idx]))
+    score = mean(scores)
+    msg = f'Scores: {scores}; mean={score}'
+    if verbose:
+        LOGGER.info(msg)
+    else:
+        LOGGER.debug(msg)
+    return score
+
+
+def _cross_validate_and_predict(
+    model: KinactiveModel | DFGClassifier,
+    df: pd.DataFrame,
+    n: int,
+    verbose: bool = False,
+) -> tuple[float, pd.DataFrame]:
+    df = df.copy()
+    idx_gen = model.generate_fold_idx(df, n)
+    scores = []
+    for fold_i, (train_idx, test_idx) in enumerate(idx_gen, start=1):
+        model.reinit_model()
+        model.train(df[train_idx])
+        scores.append(model.score(df[test_idx]))
+        y_pred = model.predict(df[test_idx])
+        if len(model.targets) == 1:
+            df.loc[test_idx, f'{model.targets[0]}_pred'] = y_pred
+        else:
+            for i, col in enumerate(model.targets):
+                df.loc[test_idx, f'{col}_pred'] = y_pred[:, i]
+        df.loc[test_idx, 'Fold_i'] = fold_i
+    score = mean(scores)
+    msg = f'Scores: {scores}; mean={score}'
+    if verbose:
+        LOGGER.info(msg)
+    else:
+        LOGGER.debug(msg)
+    return score, df
+
+
 @curry
 def xgb_objective(
     trial: optuna.Trial, df: pd.DataFrame, model: KinactiveModel, n_cv: int = 5
@@ -99,7 +375,7 @@ def xgb_objective(
     params = {
         'learning_rate': trial.suggest_float('learning_rate', 0, 1),
         'max_depth': trial.suggest_int('max_depth', 4, 16),
-        'gamma': trial.suggest_float('gamma', 0, 20.0),
+        'gamma': trial.suggest_float('gamma', 0, 10.0),
         'reg_lambda': trial.suggest_float('reg_lambda', 0, 10.0),
         'reg_alpha': trial.suggest_float('reg_alpha', 0, 10.0),
         'colsample_bytree': trial.suggest_float('colsample_bytree', 0.4, 1.0),
@@ -113,190 +389,6 @@ def xgb_objective(
     model = model.__class__(model.model, model.targets, model.features, params)
     score = model.cv(df, n_cv)
     return score
-
-
-class KinactiveModel:
-    def __init__(
-        self,
-        model,
-        targets: abc.Iterable[str],
-        features: abc.Iterable[str] = (),
-        params: dict[str, t.Any] | None = None,
-    ):
-        if not isinstance(features, list):
-            features = list(features)
-        if not isinstance(targets, list):
-            targets = list(targets)
-        self._features = features
-        self._targets = targets
-        self._model = model
-        self.params = params or {}
-
-    @property
-    def model(self):
-        return self._model
-
-    @property
-    def features(self) -> list[str]:
-        return self._features
-
-    @property
-    def targets(self) -> list[str]:
-        return self._targets
-
-    def reinit_model(self):
-        if isinstance(self.model, type):
-            self._model = self._model(**self.params)
-        else:
-            self._model = self._model.__class__(**self.params)
-
-    def train(self, df: pd.DataFrame):
-        df, ys = _get_xy(df, self.features, self.targets)
-        assert ys is not None, f'failed finding target variables {self.targets}'
-        self._model.fit(df.values, np.squeeze(ys.values))
-
-    def predict(self, df: pd.DataFrame):
-        df = _apply_selection(df, self.features)
-        return self._model.predict(df.values)
-
-    @abstractmethod
-    def score(self, df: pd.DataFrame):
-        raise NotImplementedError
-
-    @abstractmethod
-    def generate_fold_idx(
-        self, df: pd.DataFrame, n: int
-    ) -> abc.Iterator[tuple[np.ndarray, np.ndarray]]:
-        raise NotImplementedError
-
-    def cv(self, df: pd.DataFrame, n: int, verbose: bool = False) -> float:
-        idx_gen = self.generate_fold_idx(df, n)
-        scores = []
-        for train_idx, test_idx in idx_gen:
-            self.reinit_model()
-            self.train(df[train_idx])
-            scores.append(self.score(df[test_idx]))
-        score = mean(scores)
-        msg = f'Scores: {scores}; mean={score}'
-        if verbose:
-            LOGGER.info(msg)
-        else:
-            LOGGER.debug(msg)
-        return score
-
-    def cv_pred(
-        self, df: pd.DataFrame, n: int, verbose: bool = False
-    ) -> tuple[float, pd.DataFrame]:
-        df = df.copy()
-        idx_gen = self.generate_fold_idx(df, n)
-        scores = []
-        for fold_i, (train_idx, test_idx) in enumerate(idx_gen, start=1):
-            self.reinit_model()
-            self.train(df[train_idx])
-            scores.append(self.score(df[test_idx]))
-            y_pred = self.predict(df[test_idx])
-            if len(self.targets) == 1:
-                df.loc[test_idx, f'{self.targets[0]}_pred'] = y_pred
-            else:
-                for i, col in enumerate(self.targets):
-                    df.loc[test_idx, f'{col}_pred'] = y_pred[:, i]
-            df.loc[test_idx, 'Fold_i'] = fold_i
-        score = mean(scores)
-        msg = f'Scores: {scores}; mean={score}'
-        if verbose:
-            LOGGER.info(msg)
-        else:
-            LOGGER.debug(msg)
-        return score, df
-
-    def select_params(
-        self, df: pd.DataFrame, n_trials: int, direction: str = 'maximize'
-    ) -> optuna.Study:
-        objective = xgb_objective(df=df, model=self)
-        study = optuna.create_study(direction=direction)
-        study.optimize(objective, n_trials=n_trials)
-        self.params = study.best_params
-        return study
-
-    def select_features(self, df: pd.DataFrame, **kwargs) -> Boruta:
-        boruta = Boruta(**kwargs)
-        df_x, df_y = _get_xy(df, self.features, self.targets)
-        assert df_y is not None
-        res = boruta.fit(df_x, np.squeeze(df_y.values), model=self.model)
-        self._features = list(res.features_.accepted)
-        return res
-
-
-class KinactiveClassifier(KinactiveModel):
-    def generate_fold_idx(
-        self, df: pd.DataFrame, n: int
-    ) -> abc.Iterator[tuple[np.ndarray, np.ndarray]]:
-        return _generate_stratified_fold_idx(
-            df['ObjectID'].values,
-            np.squeeze(df[self.targets].values),
-            n
-        )
-
-    def predict_proba(self, df: pd.DataFrame) -> np.ndarray:
-        df = _apply_selection(df, self.features)
-        return self._model.predict_proba(df.values)
-
-    def score(self, df: pd.DataFrame, **kwargs) -> float:
-        y_pred = self.predict(df)
-        y_true = np.squeeze(df[self.targets].values)
-        if (
-            len(self.targets) > 1
-            or len(np.bincount(y_true)) > 2
-            or len(np.bincount(y_pred)) > 2
-            and 'average' not in kwargs
-        ):
-            kwargs['average'] = 'micro'
-        return f1_score(y_true, y_pred, **kwargs)
-
-
-class KinactiveRegressor(KinactiveModel):
-    def generate_fold_idx(
-        self, df: pd.DataFrame, n: int
-    ) -> abc.Iterator[tuple[np.ndarray, np.ndarray]]:
-        return _generate_fold_idx(df['ObjectID'].map(_get_unique_group).values, n)
-
-    def score(self, df: pd.DataFrame, **kwargs) -> float:
-        y_pred = self.predict(df)
-        y_true = np.squeeze(df[self.targets].values)
-        return r2_score(y_true, y_pred, **kwargs)
-
-
-DFGModels = t.NamedTuple(
-    'DFGModels',
-    [
-        ('in_', KinactiveClassifier),
-        ('out', KinactiveClassifier),
-        ('inter', KinactiveClassifier),
-        ('meta', KinactiveClassifier),
-    ],
-)
-
-
-class DFGClassifier:
-    def __init__(
-        self,
-        in_model: KinactiveClassifier,
-        out_model: KinactiveClassifier,
-        inter_model: KinactiveClassifier,
-        meta_model: KinactiveClassifier,
-    ):
-        self.models = DFGModels(in_model, out_model, inter_model, meta_model)
-
-    def predict(self, df: pd.DataFrame) -> pd.DataFrame:
-        df = df.copy()
-        df['in_proba'] = self.models.in_.predict_proba(df)
-        df['out_proba'] = self.models.out.predict_proba(df)
-        df['inter_proba'] = self.models.inter.predict_proba(df)
-        y_prob = self.models.meta.predict_proba(df).round(2)
-        for i, label in enumerate(['in', 'out', 'inter']):
-            df[f'{label}_proba_meta'] = y_prob[:, i]
-        df['DFG_pred'] = np.argmax(y_prob, axis=1)
-        return df
 
 
 def make(
