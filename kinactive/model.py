@@ -65,6 +65,7 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
         targets: abc.Iterable[str],
         features: abc.Iterable[str] = (),
         params: dict[str, t.Any] | None = None,
+        use_early_stopping: bool = False,
     ):
         if not isinstance(features, list):
             features = list(features)
@@ -74,6 +75,7 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
         self._targets = targets
         self._model = model
         self.params = params or {}
+        self.use_early_stopping = use_early_stopping
 
     @property
     def model(self):
@@ -94,9 +96,23 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
             self._model = self._model.__class__(**self.params)
 
     def train(self, df: pd.DataFrame):
-        df, ys = _get_xy(df, self.features, self.targets)
-        assert ys is not None, f'failed finding target variables {self.targets}'
-        self._model.fit(df.values, np.squeeze(ys.values))
+        if self.use_early_stopping:
+            train_idx, eval_idx = next(self.generate_fold_idx(df, 10))
+            train_df, train_ys = _get_xy(df[train_idx], self.features, self.targets)
+            eval_df, eval_ys = _get_xy(df[eval_idx], self.features, self.targets)
+            self._model.fit(
+                train_df,
+                np.squeeze(train_ys.values),
+                eval_set=[(eval_df, np.squeeze(eval_ys.values))],
+                verbose=False
+            )
+        else:
+            assert (
+                'early_stopping_rounds' not in self.params
+            ), 'Must not have early stopping params if `use_early_stopping` is `False`'
+            xs, ys = _get_xy(df, self.features, self.targets)
+            assert ys is not None, f'failed finding target variables {self.targets}'
+            self._model.fit(xs.values, np.squeeze(ys.values))
 
     def predict(self, df: pd.DataFrame):
         df = _apply_selection(df, self.features)
@@ -113,7 +129,9 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
     def select_params(
         self, df: pd.DataFrame, n_trials: int, direction: str = 'maximize'
     ) -> optuna.Study:
-        objective = xgb_objective(df=df, model=self)
+        objective = xgb_objective(
+            df=df, model=self, use_early_stopping=self.use_early_stopping
+        )
         study = optuna.create_study(direction=direction)
         study.optimize(objective, n_trials=n_trials)
         self.params = study.best_params
@@ -330,8 +348,8 @@ def _cross_validate(
         model.reinit_model()
         model.train(df[train_idx])
         scores.append(model.score(df[test_idx]))
-    score = mean(scores)
-    msg = f'Scores: {scores}; mean={score}'
+    score = np.mean(scores)
+    msg = f'Scores: {np.array(scores).round(2)}; mean={score}'
     if verbose:
         LOGGER.info(msg)
     else:
@@ -370,7 +388,11 @@ def _cross_validate_and_predict(
 
 @curry
 def xgb_objective(
-    trial: optuna.Trial, df: pd.DataFrame, model: KinactiveModel, n_cv: int = 5
+    trial: optuna.Trial,
+    df: pd.DataFrame,
+    model: KinactiveModel,
+    n_cv: int = 5,
+    use_early_stopping: bool = False,
 ) -> float:
     params = {
         'learning_rate': trial.suggest_float('learning_rate', 0, 1),
@@ -381,12 +403,16 @@ def xgb_objective(
         'colsample_bytree': trial.suggest_float('colsample_bytree', 0.4, 1.0),
         'colsample_bylevel': trial.suggest_float('colsample_bylevel', 0.4, 1.0),
     }
-    if isinstance(KinactiveModel, KinactiveClassifier):
+    if isinstance(model, KinactiveClassifier):
         params['scale_pos_weight'] = trial.suggest_float('scale_pos_weight', 0.0, 10.0)
+    if not use_early_stopping:
+        params['n_estimators'] = trial.suggest_int('max_depth', 10, 1000)
 
     # callback = optuna.integration.XGBoostPruningCallback(trial, 'validation_logloss')
     params = {**model.params, **params}
-    model = model.__class__(model.model, model.targets, model.features, params)
+    model = model.__class__(
+        model.model, model.targets, model.features, params, use_early_stopping
+    )
     score = model.cv(df, n_cv)
     return score
 
@@ -396,6 +422,7 @@ def make(
     targets: list[str],
     features: list[str],
     starting_params: dict[str, t.Any],
+    use_early_stopping: bool = False,
     classifier: bool = True,
     n_trials_sel_1: int = 50,
     n_trials_sel_2: int = 50,
@@ -411,6 +438,7 @@ def make(
             targets,
             features,
             params=starting_params,
+            use_early_stopping=use_early_stopping,
         )
     else:
         model = KinactiveRegressor(
@@ -418,6 +446,7 @@ def make(
             targets,
             features,
             params=starting_params,
+            use_early_stopping=use_early_stopping,
         )
 
     if n_trials_sel_1 > 0:

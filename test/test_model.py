@@ -39,7 +39,8 @@ def make_data(reg: bool = False, **kwargs) -> pd.DataFrame:
 @pytest.mark.parametrize('num_targets', [2, 3])
 @pytest.mark.parametrize('is_reg', [False, True])
 @pytest.mark.parametrize('starting_params', [{}, {'n_estimators': 20}])
-def test_make(num_targets, is_reg, starting_params):
+@pytest.mark.parametrize('use_early_stopping', [True, False])
+def test_make(num_targets, is_reg, starting_params, use_early_stopping):
     kwargs = dict(n_features=20, n_informative=10)
     if is_reg:
         kwargs['reg'] = True
@@ -50,12 +51,16 @@ def test_make(num_targets, is_reg, starting_params):
     df = make_data(**kwargs)
 
     target_names = [c for c in df.columns if c.startswith('Y')]
+    print(starting_params, use_early_stopping)
+    if use_early_stopping:
+        starting_params['early_stopping_rounds'] = 3
 
     model, score, df = make(
         df,
         target_names,
         [],
         starting_params,
+        use_early_stopping,
         boruta_kwargs=dict(test_stratify=False, use_test=False),
         classifier=not is_reg,
         n_trials_sel_1=5,
@@ -74,17 +79,21 @@ def test_make(num_targets, is_reg, starting_params):
 
 
 @pytest.mark.parametrize('is_cls', [True, False])
-@pytest.mark.parametrize('params', [{}, {'n_estimators': 5}])
-def test_io(is_cls, params):
+@pytest.mark.parametrize('params', [{}, {'n_estimators': 10}])
+def test_io(is_cls, params, use_early_stopping):
     df = make_data(not is_cls)
     targets = [c for c in df.columns if c.startswith('Y')]
     features = [c for c in df.columns if c.startswith('X')]
 
     if is_cls:
-        model = KinactiveClassifier(XGBClassifier(), targets, features, params)
+        model = KinactiveClassifier(
+            XGBClassifier(), targets, features, params, use_early_stopping
+        )
         suffix = 'classifier'
     else:
-        model = KinactiveRegressor(XGBRegressor(), targets, features, params)
+        model = KinactiveRegressor(
+            XGBRegressor(), targets, features, params, use_early_stopping
+        )
         suffix = 'regressor'
 
     model.train(df)
