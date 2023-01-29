@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import operator as op
 import re
 import typing as t
 from abc import ABCMeta, abstractmethod
@@ -104,7 +105,7 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
                 train_df,
                 np.squeeze(train_ys.values),
                 eval_set=[(eval_df, np.squeeze(eval_ys.values))],
-                verbose=False
+                verbose=False,
             )
         else:
             assert (
@@ -133,7 +134,8 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
             df=df, model=self, use_early_stopping=self.use_early_stopping
         )
         study = optuna.create_study(direction=direction)
-        study.optimize(objective, n_trials=n_trials)
+        cb = EarlyStoppingCallback(10, direction=direction)
+        study.optimize(objective, n_trials=n_trials, callbacks=[cb])
         self.params = study.best_params
         return study
 
@@ -265,6 +267,38 @@ class DFGClassifier(ModelBase):
 
     def cv_pred(self, df: pd.DataFrame, n: int, verbose: bool = True):
         return _cross_validate_and_predict(self, df, n, verbose)
+
+
+class EarlyStoppingCallback(object):
+    """
+    Early stopping callback for Optuna.
+
+    See https://github.com/optuna/optuna/issues/1001#issuecomment-862843041
+    """
+
+    def __init__(self, early_stopping_rounds: int, direction: str = "minimize") -> None:
+        self.early_stopping_rounds = early_stopping_rounds
+
+        self._iter = 0
+
+        if direction == "minimize":
+            self._operator = op.lt
+            self._score = np.inf
+        elif direction == "maximize":
+            self._operator = op.gt
+            self._score = -np.inf
+        else:
+            ValueError(f"invalid direction: {direction}")
+
+    def __call__(self, study: optuna.Study, trial: optuna.Trial) -> None:
+        if self._operator(study.best_value, self._score):
+            self._iter = 0
+            self._score = study.best_value
+        else:
+            self._iter += 1
+
+        if self._iter >= self.early_stopping_rounds:
+            study.stop()
 
 
 def _apply_selection(df: pd.DataFrame, features: list[str]):
