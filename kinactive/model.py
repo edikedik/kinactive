@@ -105,7 +105,7 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
                 train_df,
                 np.squeeze(train_ys.values),
                 eval_set=[(eval_df, np.squeeze(eval_ys.values))],
-                verbose=False,
+                verbose=0,
             )
         else:
             assert (
@@ -113,7 +113,7 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
             ), 'Must not have early stopping params if `use_early_stopping` is `False`'
             xs, ys = _get_xy(df, self.features, self.targets)
             assert ys is not None, f'failed finding target variables {self.targets}'
-            self._model.fit(xs.values, np.squeeze(ys.values))
+            self._model.fit(xs.values, np.squeeze(ys.values), verbose=0)
 
     def predict(self, df: pd.DataFrame):
         df = _apply_selection(df, self.features)
@@ -143,7 +143,9 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
         boruta = Boruta(**kwargs)
         df_x, df_y = _get_xy(df, self.features, self.targets)
         assert df_y is not None
-        res = boruta.fit(df_x, np.squeeze(df_y.values), model=self.model)
+        res = boruta.fit(
+            df_x, np.squeeze(df_y.values), model=self.model, verbose=0
+        )
         self._features = list(res.features_.accepted)
         return res
 
