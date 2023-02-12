@@ -64,6 +64,8 @@ class _DumpNames:
     in_model_dirname: str = 'in'
     out_model_dirname: str = 'out'
     inter_model_dirname: str = 'inter'
+    d1_model_dirname: str = 'd1'
+    d2_model_dirname: str = 'd2'
     meta_model_dirname: str = 'meta'
 
 
@@ -89,6 +91,10 @@ class _ColNames:
     dfg_in_meta_prob: str = 'in_meta_proba'
     dfg_out_meta_prob: str = 'out_meta_prob'
     dfg_inter_meta_prob: str = 'inter_meta_prob'
+    dfg_d1: str = "Dist(p1=142,p2=52,a1='CZ',a2='CA',com=False)"
+    dfg_d2: str = "Dist(p1=142,p2=30,a1='CZ',a2='CA',com=False)"
+    dfg_d1_pred: str = 'D1_pred'
+    dfg_d2_pred: str = 'D2_pred'
 
     @property
     def is_dfg_cols(self) -> tuple[str, str, str]:
@@ -109,6 +115,10 @@ class _ColNames:
             self.dfg_pred,
             self.dfg_cls,
             self.dfg_cls_pred,
+            self.dfg_d1,
+            self.dfg_d2,
+            self.dfg_d1_pred,
+            self.dfg_d2_pred,
             *self.is_dfg_cols,
             *self.dfg_proba_cols,
             *self.dfg_meta_proba_cols,

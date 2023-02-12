@@ -40,6 +40,8 @@ def save_dfg(
     save(dfg_model.models.in_, base / name, DumpNames.in_model_dirname, overwrite)
     save(dfg_model.models.out, base / name, DumpNames.out_model_dirname, overwrite)
     save(dfg_model.models.inter, base / name, DumpNames.inter_model_dirname, overwrite)
+    save(dfg_model.models.d1, base / name, DumpNames.d1_model_dirname, overwrite)
+    save(dfg_model.models.d2, base / name, DumpNames.d2_model_dirname, overwrite)
     save(dfg_model.models.meta, base / name, DumpNames.meta_model_dirname, overwrite)
     return base / name
 
@@ -95,25 +97,29 @@ def load_dfg(path: Path) -> DFGClassifier:
             DumpNames.in_model_dirname,
             DumpNames.out_model_dirname,
             DumpNames.inter_model_dirname,
+            DumpNames.d1_model_dirname,
+            DumpNames.d2_model_dirname,
             DumpNames.meta_model_dirname,
         ]
     )
-    in_, out, inter, meta = models
-    return DFGClassifier(in_, out, inter, meta)
+    in_, out, inter, d1, d2, meta = models
+    return DFGClassifier(in_, out, inter, d1, d2, meta)
 
 
 def load(path: Path) -> KinactiveClassifier | KinactiveRegressor | DFGClassifier:
     if not path.is_dir():
         raise NotADirectoryError(f'{path} must be dir')
     name = path.name.lower()
+
+    if 'dfg' in name:
+        return load_dfg(path)
+
     if 'classifier' in name:
         cls = KinactiveClassifier
         xgb_type = XGBClassifier
     elif 'regressor' in name:
         cls = KinactiveRegressor
         xgb_type = XGBRegressor
-    elif 'dfg' in name:
-        return load_dfg(path)
     else:
         raise NameError(
             'Directory name must contain either "regressor" or "classifier"'

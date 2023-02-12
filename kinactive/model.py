@@ -11,7 +11,7 @@ from statistics import mean
 import numpy as np
 import optuna
 import pandas as pd
-from Boruta import Boruta
+from eBoruta import eBoruta
 from sklearn.metrics import f1_score, r2_score
 from toolz import curry
 from xgboost import XGBClassifier, XGBRegressor
@@ -22,41 +22,72 @@ _PDB_PATTERN = re.compile(r'\((\w{4}):\w+\|')
 LOGGER = logging.getLogger(__name__)
 
 
-# TODO Boruta: y as df is not supported
-# TODO Boruta: explicit support for regressors (with use_test=True)
-
-
 class ModelBase(metaclass=ABCMeta):
+    """
+    An abstract base class for model objects.
+    """
+
     @property
     @abstractmethod
     def targets(self) -> abc.Sequence[str]:
-        ...
+        """
+        :return: A sequence of target variables.
+        """
 
     @abstractmethod
     def reinit_model(self):
-        ...
+        """
+        Reinitialize model.
+        """
 
     @abstractmethod
     def train(self, df: pd.DataFrame):
-        ...
+        """
+        Train the model on entirety of the provided data.
+        """
 
     @abstractmethod
     def predict(self, df: pd.DataFrame):
-        ...
+        """
+        Make predictions from the provided data.
+        """
 
     @abstractmethod
-    def cv(self, df: pd.DataFrame, n: int):
-        ...
+    def cv(self, df: pd.DataFrame, n: int) -> float:
+        """
+        Cross-validate the model.
+
+        :param df: Data to use for training/testing.
+        :param n: The number of CV folds.
+        :return: A performance estimate aggregated across testing folds.
+        """
 
     @abstractmethod
     def generate_fold_idx(
         self, df: pd.DataFrame, n: int
     ) -> abc.Iterator[tuple[np.ndarray, np.ndarray]]:
-        ...
+        """
+        Generate fold indices from the provided data.
+
+        :param df: DataFrame with predictors.
+        :param n: The number of folds.
+        :return: Ann iterator over tuples with train and test boolean indices
+            allowing to select train and test observations from `df`.
+        """
 
     @abstractmethod
     def score(self, df: pd.DataFrame) -> float:
-        ...
+        """
+        Score the model.
+
+        :class:`KinactiveClassifier` uses :func:`f1_score`.
+
+        :class:`KinactiveRegressor` uses :func:`r2_score`.
+
+        :param df: Data to predict from.
+        :return: A single number -- model's performance estimate (the higher
+            the better).
+        """
 
 
 class KinactiveModel(ModelBase, metaclass=ABCMeta):
@@ -75,7 +106,9 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
         self._features = features
         self._targets = targets
         self._model = model
+        #: Model's parameters.
         self.params = params or {}
+        #: Use early stopping via eval set.
         self.use_early_stopping = use_early_stopping
 
     @property
@@ -139,13 +172,11 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
         self.params = study.best_params
         return study
 
-    def select_features(self, df: pd.DataFrame, **kwargs) -> Boruta:
-        boruta = Boruta(**kwargs)
+    def select_features(self, df: pd.DataFrame, **kwargs) -> eBoruta:
+        boruta = eBoruta(**kwargs)
         df_x, df_y = _get_xy(df, self.features, self.targets)
         assert df_y is not None
-        res = boruta.fit(
-            df_x, np.squeeze(df_y.values), model=self.model, verbose=0
-        )
+        res = boruta.fit(df_x, np.squeeze(df_y.values), model=self.model, verbose=0)
         self._features = list(res.features_.accepted)
         return res
 
@@ -193,6 +224,8 @@ DFGModels = t.NamedTuple(
         ('in_', KinactiveClassifier),
         ('out', KinactiveClassifier),
         ('inter', KinactiveClassifier),
+        ('d1', KinactiveRegressor),
+        ('d2', KinactiveRegressor),
         ('meta', KinactiveClassifier),
     ],
 )
@@ -204,41 +237,78 @@ class DFGClassifier(ModelBase):
         in_model: KinactiveClassifier,
         out_model: KinactiveClassifier,
         inter_model: KinactiveClassifier,
+        d1_model: KinactiveRegressor,
+        d2_model: KinactiveRegressor,
         meta_model: KinactiveClassifier,
     ):
-        self.models = DFGModels(in_model, out_model, inter_model, meta_model)
+        self.models = DFGModels(
+            in_model, out_model, inter_model, d1_model, d2_model, meta_model
+        )
 
     @property
     def targets(self) -> list[str]:
         return [ColNames.dfg_cls]
 
+    @property
+    def pred_names(self) -> list[str]:
+        """
+        :return: A list of response variable names for :attr:`models`.
+        """
+        return [
+            *ColNames.dfg_proba_cols,
+            ColNames.dfg_d1_pred,
+            ColNames.dfg_d2_pred,
+        ]
+
     def reinit_model(self):
         for m in self.models:
             m.reinit_model()
 
-    def _predict_no_meta(
+    def predict_no_meta(
         self, df: pd.DataFrame
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        For each model in :attr:`models` except `meta`, predict the response
+        variable.
+
+        :return: Tuple of arrays with predictions. The order corresponds to the
+            one defined by :attr:`models`.
+        """
         return (
             self.models.in_.predict_proba(df)[:, 1],
             self.models.out.predict_proba(df)[:, 1],
             self.models.inter.predict_proba(df)[:, 1],
+            self.models.d1.predict(df),
+            self.models.d2.predict(df),
         )
 
     def train(self, df: pd.DataFrame):
-        self.models.in_.train(df)
-        self.models.out.train(df)
-        self.models.inter.train(df)
+        """
+        1. Train :attr:`models`
+        2. Use trained :attr:`models` to predict their response variables.
+        3. Use predicted variables to train the `meta` model.
+
+        :param df: A dataset to train on. Must include all relevant variables.
+        """
+        for m in self.models:
+            m.train(df)
         df_pred = df.copy()
-        pred = self._predict_no_meta(df)
-        for c, p in zip(ColNames.dfg_proba_cols, pred):
+        pred = self.predict_no_meta(df)
+        for c, p in zip(self.pred_names, pred):
             df_pred[c] = p
         self.models.meta.train(df)
 
     def predict_full(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Predict all response variables and store predictions in the copy of `df`.
+
+        :param df: A dataset to predict from. Must include all relevant
+            variables.
+        :return: A copy of `df` with predictions.
+        """
         df = df.copy()
-        pred = self._predict_no_meta(df)
-        for c, p in zip(ColNames.dfg_proba_cols, pred):
+        pred = self.predict_no_meta(df)
+        for c, p in zip(self.pred_names, pred):
             df[c] = p
         y_prob = self.models.meta.predict_proba(df).round(2)
         for i, c in enumerate(ColNames.dfg_meta_proba_cols):
@@ -248,6 +318,18 @@ class DFGClassifier(ModelBase):
         return df
 
     def predict(self, df: pd.DataFrame) -> np.ndarray:
+        """
+        Predict the DFG class. ``0`` stands for DFGin, ``1`` for DFGout, and
+        ``2`` for DFGinter.
+
+        .. note::
+            This is equivalent to :meth:`predict_full` and selecting the
+            relevant column.
+
+        :param df: A dataset to predict from. Must include all relevant
+            variables.
+        :return: An array of predicted classes.
+        """
         return self.predict_full(df)[ColNames.dfg_cls_pred].values
 
     def score(self, df: pd.DataFrame, **kwargs):
@@ -271,7 +353,7 @@ class DFGClassifier(ModelBase):
         return _cross_validate_and_predict(self, df, n, verbose)
 
 
-class EarlyStoppingCallback(object):
+class EarlyStoppingCallback:
     """
     Early stopping callback for Optuna.
 
