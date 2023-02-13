@@ -6,6 +6,7 @@ data
 *.ipynb
 
 .idea/*
+todo.md
 
 # User-specific stuff
 .idea/**/workspace.xml
