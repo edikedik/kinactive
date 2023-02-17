@@ -14,7 +14,7 @@ from lXtractor.core.chain import (
     Chain,
     ChainIO,
 )
-from lXtractor.core.chain.tree import make_str_tree
+from lXtractor.core.chain.tree import recover
 from lXtractor.core.config import SeqNames
 from lXtractor.ext.hmm import PyHMMer
 from lXtractor.ext.pdb_ import PDB
@@ -71,26 +71,6 @@ def _filter_by_size(
 
 def _rm_solvent(structures: list[ChainStructure]) -> list[ChainStructure]:
     return [s.rm_solvent() for s in structures]
-
-
-def _try_make_tree(objs: abc.Iterable[CT_]):
-    try:
-        make_str_tree(objs, connect=True)
-    except Exception as e:
-        LOGGER.exception(e)
-        LOGGER.warning(f'Failed to create a tree from objs {objs} due to {e}')
-
-
-def _connect_by_trees(c: Chain) -> Chain:
-    for child_seq in c.children.iter_sequences():
-        if c.seq.name in child_seq.meta['id']:
-            _try_make_tree([c.seq, child_seq])
-    for s in c.structures:
-        for child_str in c.children.iter_structures():
-            if s.name in child_str.meta['id']:
-                _try_make_tree([s, child_str])
-                _try_make_tree([s.seq, child_str.seq])
-    return c
 
 
 class DB:
@@ -350,11 +330,12 @@ class DB:
         )
         yield from io.write(chains, base=dest)
 
-    def load(self, dump: Path) -> ChainList[Chain]:
+    def load(self, dump: Path, n: int | None = None) -> ChainList[Chain]:
         """
         Load prepared db.
 
         :param dump: Path with dumped :class:`Chain`s.
+        :param n: Load `n` first objects. Useful for testing.
         :return: A chain list with initialized :class:`Chain`s.
         """
         io = ChainIO(
@@ -362,10 +343,11 @@ class DB:
             verbose=self.cfg.verbose,
             tolerate_failures=True,
         )
+        chain_read_it = io.read_chain(dump, callbacks=[recover], search_children=True)
+        if n is not None:
+            chain_read_it = take(n, chain_read_it)
 
-        chains = ChainList(
-            io.read_chain(dump, callbacks=[_connect_by_trees], search_children=True)
-        )
+        chains = ChainList(chain_read_it)
 
         if len(chains) > 0:
             LOGGER.info(f'Parsed {len(chains)} `Chain`s')
