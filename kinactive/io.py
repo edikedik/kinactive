@@ -16,7 +16,7 @@ DumpNames = _DumpNames()
 _X = t.TypeVar('_X', XGBRegressor, XGBClassifier)
 
 
-def save_txt_lines(lines: abc.Iterable[str], path: Path) -> Path:
+def save_txt_lines(lines: abc.Iterable[t.Any], path: Path) -> Path:
     with path.open('w') as f:
         for x in lines:
             print(x, file=f)
