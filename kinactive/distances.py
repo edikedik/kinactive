@@ -12,6 +12,7 @@ import biotite.structure as bst
 import numpy as np
 import pandas as pd
 from lXtractor.core.chain import ChainStructure, ChainList
+from lXtractor.core.exceptions import MissingData
 from lXtractor.protocols import superpose_pairwise, SupOutputFlex, SupOutputStrict
 
 from kinactive.config import (
@@ -105,7 +106,13 @@ class DistanceMatrix:
         choose_ref_by: str = ColNames.rmsd_ca,
         **kwargs,
     ) -> list[SupOutputStrict] | list[SupOutputFlex]:
+
         structures = ChainList(structures)
+        if len(structures) == 1:
+            return structures
+        if len(structures) == 0:
+            raise MissingData('No structures to superpose')
+
         ids = {x.id for x in structures}
         df = self.df
         sub = df[df[ColNames.id_fix].isin(ids) & df[ColNames.id_mob].isin(ids)]
