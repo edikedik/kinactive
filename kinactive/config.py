@@ -21,19 +21,19 @@ class DBConfig:
 
     max_fetch_trials: int = 2
 
-    init_cpus: int | None = None
-    io_cpus: int | None = None
-    init_map_numbering_cpus: int | None = None
+    io_cpus: int = 1
+    init_cpus: int = 1
+    init_map_numbering_cpus: int = 1
 
     profile: Path = Path(__file__).parent / "resources" / "Pkinase.hmm"
 
     pk_map_name: str = PK_NAME
-    pk_min_score: float = 30
+    pk_min_score: float = 50
     pk_min_seq_domain_size: int = 150
     pk_min_str_domain_size: int = 100
     pk_min_cov_hmm: float = 0.7
     pk_min_cov_seq: float = 0.7
-    pk_min_str_seq_match: float = 0.7
+    pk_min_str_seq_match: float = 0.9
 
     min_seq_size: int = 150
     max_seq_size: int = 3000
