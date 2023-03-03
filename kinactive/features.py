@@ -1,15 +1,27 @@
+import logging
 import typing as t
 from collections import abc
 from dataclasses import dataclass
 from itertools import chain
 
 import pandas as pd
-from lXtractor.core.chain import ChainSequence, ChainStructure
+from lXtractor.core.chain import ChainSequence, ChainStructure, Chain, ChainList
+from lXtractor.variables import (
+    GenericCalculator,
+    Manager,
+    SeqEl,
+    PFP,
+    Dist,
+    PseudoDihedral,
+    Phi,
+    Psi,
+    Chi1,
+    SASA,
+    LigandDist,
+    LigandNames,
+    LigandContactsCount,
+)
 from lXtractor.variables.base import StructureVariable, SequenceVariable
-from lXtractor.variables.calculator import GenericCalculator
-from lXtractor.variables.manager import Manager
-from lXtractor.variables.sequential import SeqEl, PFP
-from lXtractor.variables.structural import Dist, PseudoDihedral, Phi, Psi, Chi1, SASA
 from more_itertools import windowed
 
 from kinactive.config import PK_NAME
@@ -18,8 +30,19 @@ from kinactive.config import PK_NAME
 CT: t.TypeAlias = ChainSequence | ChainStructure
 VT: t.TypeAlias = SequenceVariable | StructureVariable
 
+LOGGER = logging.getLogger(__name__)
+Results = t.NamedTuple(
+    "Results",
+    [
+        ("seq_vs", pd.DataFrame),
+        ("str_seq_vs", pd.DataFrame),
+        ("str_vs", pd.DataFrame),
+        ("lig_vs", pd.DataFrame),
+    ],
+)
 
-def _make_pdist(ps1, ps2, a1='CB', a2='CB'):
+
+def _make_pdist(ps1, ps2, a1="CB", a2="CB"):
     for i in ps1:
         for j in ps2:
             yield Dist(i, j, a1, a2)
@@ -71,10 +94,20 @@ class DefaultFeatures:
                     _make_pdist(self.b3_sheet, self.xdfgx),
                     _make_pdist(self.ac_helix, self.xdfgx),
                     [
-                        Dist(142, 52, 'CZ', 'CA'),
-                        Dist(142, 30, 'CZ', 'CA'),
+                        Dist(142, 52, "CZ", "CA"),
+                        Dist(142, 30, "CZ", "CA"),
                     ],
                 ),
+            )
+        )
+
+    def make_lig_vs(self) -> tuple[StructureVariable, ...]:
+        pos = self.profile_pos
+        return tuple(
+            chain(
+                (LigandContactsCount(p) for p in pos),
+                (LigandDist(p) for p in pos),
+                (LigandNames(p) for p in pos),
             )
         )
 
@@ -108,6 +141,48 @@ class DefaultFeatures:
             chains, self.make_str_vs(), num_proc, verbose, map_name=map_name
         )
 
+    def calculate_lig_vs(
+        self,
+        chains: abc.Sequence[ChainStructure],
+        map_name: str = PK_NAME,
+        num_proc: int | None = None,
+        verbose: bool = True,
+    ) -> pd.DataFrame:
+        return calculate(
+            chains, self.make_lig_vs(), num_proc, verbose, map_name=map_name
+        )
+
+    def calculate_all_vs(
+        self,
+        chains: abc.Sequence[Chain],
+        map_name: str = PK_NAME,
+        num_proc: int | None = None,
+        verbose: bool = True,
+    ) -> Results:
+        if not isinstance(chains, ChainList):
+            chains = ChainList(chains)
+        kw = {"map_name": map_name, "num_proc": num_proc, "verbose": verbose}
+
+        LOGGER.info("Calculating sequence variables on canonical seqs")
+        df_can_seq = self.calculate_seq_vs(chains.sequences, **kw)
+        LOGGER.info(f"Canonical sequences features shape: {df_can_seq.shape}")
+
+        LOGGER.info("Calculating sequence variables on structure seqs")
+        df_str_seq = self.calculate_seq_vs(chains.structure_sequences, **kw)
+        LOGGER.info(f"Structure sequences features shape: {df_str_seq.shape}")
+
+        LOGGER.info("Calculating structure variables")
+        df_str = self.calculate_str_vs(chains.structures, **kw)
+        LOGGER.info(f"Structure features shape: {df_str.shape}")
+
+        LOGGER.info("Calculating ligand variables")
+        df_lig = self.calculate_lig_vs(chains.structures, **kw)
+        LOGGER.info(f"Ligand features shape: {df_lig.shape}")
+
+        LOGGER.info("Finished calculations")
+
+        return Results(df_can_seq, df_str_seq, df_str, df_lig)
+
 
 def calculate(
     chains: abc.Sequence[CT],
@@ -124,5 +199,5 @@ def calculate(
     return df
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     raise RuntimeError
