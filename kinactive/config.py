@@ -12,12 +12,12 @@ DFG_MAP_REV = {v: k for k, v in DFG_MAP.items()}
 
 @dataclass
 class DBConfig:
-    verbose: bool
+    verbose: bool = True
 
-    target_dir: Path
-    pdb_dir: Path
-    seq_dir: Path
-    pdb_dir_info: Path | None
+    target_dir: Path = Path('db')
+    pdb_dir: Path = Path('pdb') / 'structures'
+    pdb_dir_info: Path = Path('pdb') / 'info'
+    seq_dir: Path = Path('uniprot') / 'fasta'
 
     max_fetch_trials: int = 2
 
@@ -99,6 +99,7 @@ class _ModelPaths:
 @dataclass
 class _ColNames:
     dfg: str = "DFG"
+    dfg_manual: str = "DFG_manual"
     dfg_pred = "DFG_pred"
     dfg_cls: str = "DFG_cls"
     dfg_cls_pred: str = "DFG_cls_pred"

@@ -75,7 +75,7 @@ class DB:
     "database" -- a collection of :class:`Chain`'s.
     """
 
-    def __init__(self, cfg: DBConfig):
+    def __init__(self, cfg: DBConfig = DBConfig()):
         self.cfg = cfg
         self._sifts: SIFTS | None = None
         self._pdb: PDB | None = None
