@@ -236,9 +236,7 @@ class DB:
             for seq, c in zip(seqs, pdb_chains)
             if len(c) > 0
         )
-        init = ChainInitializer(
-            tolerate_failures=True, verbose=self.cfg.verbose
-        )
+        init = ChainInitializer(tolerate_failures=True, verbose=self.cfg.verbose)
         chains: ChainList[Chain] = ChainList(
             init.from_mapping(
                 seq2pdb,
@@ -268,8 +266,8 @@ class DB:
                     child.seq.add_seq(pk_name, seq_child[pk_name])
                 except Exception as e:
                     raise RuntimeError(
-                        f'Unexpected exception when trying to init child {seq_child} '
-                        f'for Chain {c}'
+                        f"Unexpected exception when trying to init child {seq_child} "
+                        f"for Chain {c}"
                     ) from e
 
         num_init = ilen(chains.collapse_children().iter_structures())
@@ -330,7 +328,9 @@ class DB:
         )
         yield from io.write(chains, base=dest)
 
-    def load(self, dump: Path, n: int | None = None) -> ChainList[Chain]:
+    def load(
+        self, dump: Path | abc.Iterable[Path], n: int | None = None
+    ) -> ChainList[Chain]:
         """
         Load prepared db.
 
