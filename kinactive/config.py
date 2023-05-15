@@ -1,49 +1,81 @@
-from collections import abc
+"""
+Configuration dataclasses for the database, matrix and io.
+"""
 from dataclasses import dataclass
 from pathlib import Path
 
-from lXtractor.core.base import SOLVENTS
 from lXtractor.core.exceptions import MissingData
 
 PK_NAME = "PK"
-DFG_MAP = {"in": 0, "out": 1, "inter": 2}
+DFG_MAP = {"in": 0, "out": 1, "other": 2}
 DFG_MAP_REV = {v: k for k, v in DFG_MAP.items()}
 
 
 @dataclass
 class DBConfig:
+    """
+    Database config.
+
+    Default parameters were used to create lXt-PK data collection.
+    To reproduce locally, you may change the paths (``*_dir*``) and adjust
+    the number of cpus (``*_cpus``).
+    """
+
+    #: progress bar output.
     verbose: bool = True
 
-    target_dir: Path = Path('db')
-    pdb_dir: Path = Path('pdb') / 'structures'
-    pdb_dir_info: Path = Path('pdb') / 'info'
-    seq_dir: Path = Path('uniprot') / 'fasta'
+    #: database dump path.
+    target_dir: Path = Path("db")
+    #: raw PDB structures.
+    pdb_dir: Path = Path("pdb") / "structures"
+    #: info on PDB structures.
+    pdb_dir_info: Path = Path("pdb") / "info"
+    #: raw UniProt sequences.
+    seq_dir: Path = Path("uniprot") / "fasta"
 
+    #: max trials for fetching an entry from external resources.
     max_fetch_trials: int = 2
 
+    #: #cpus for ``ChainIO`` (10-20 usually works fine).
     io_cpus: int = 1
+    #: #cpus for ``ChainInitializer`` (10-20 usually works fine).
     init_cpus: int = 1
+    #: #cpus for pairwise sequence alignments. Increase to max number possible.
     init_map_numbering_cpus: int = 1
 
+    #: A path to the PK profile (supplied with the package)
     profile: Path = Path(__file__).parent / "resources" / "Pkinase.hmm"
 
+    #: the domain name to use for extraction.
     pk_map_name: str = PK_NAME
+    #: a minimum BitScore to qualify for hit.
     pk_min_score: float = 50
+    #: min domain size for canonical sequences.
     pk_min_seq_domain_size: int = 150
+    #: min domain size for structure sequences.
     pk_min_str_domain_size: int = 100
+    #: min coverage of the hmm nodes.
     pk_min_cov_hmm: float = 0.7
+    #: min coverage of the sequence.
     pk_min_cov_seq: float = 0.7
+    #: min matching residues' fraction between structure and canonical sequences.
     pk_min_str_seq_match: float = 0.9
 
+    #: minimum sequence size to filter raw sequences from UniProt.
     min_seq_size: int = 150
+    #: maximum sequence size to filter raw sequences from UniProt.
     max_seq_size: int = 3000
 
+    #: PDB files format.
     pdb_fmt: str = "cif"
+    #: The number of threads to use when fetching data from the PDB.
     pdb_num_fetch_threads: int = 10
+    #: The minimum structure size (in residues) to filter raw structures.
     pdb_str_min_size: int = 100
-    pdb_solvents: abc.Sequence[str] = SOLVENTS
 
+    #: The chunk size to split UniProt ids into when fetching the data from UniProt.
     uniprot_chunk_size: int = 100
+    #: The number of threads to use when fetching the data from UniProt.
     uniprot_num_fetch_threads: int = 10
 
     def __post_init__(self):
@@ -53,17 +85,30 @@ class DBConfig:
 
 @dataclass
 class MatrixConfig:
+    """
+    The superposition-based matrix configuration. This matrix is used to compute
+    """
+
+    #: Path to dump the results.
     dir: Path = Path("clustering")
 
+    #: The number of the most covered HMM nodes to use for superposing.
     n_super_pos: int = 30
+    #: The PK domain name. Should be the same as used in :class:`kinactive.db.DB`.
     pk_map_name: str = PK_NAME
 
+    #: The number of cpus to use for parallel computation. Adjust carefully.
     n_proc: int | None = None
+    #: The chunk size for distributing data between processes.
     chunksize: int = 5000
 
+    #: DFG-Asp/Phe positions.
     df_pos: tuple[int, int] = (141, 142)
+    #: Backbone atom names used for superposing.
     bb_atoms: tuple[str, ...] = ("CA",)
+    #: DFG-Phe atom names used for RMSD computation.
     phe_atoms: tuple[str, ...] = ("CA", "CB", "CG", "CD1", "CD2", "CE1", "CE2", "CZ")
+    #: DFG-Asp atom names used for RMSD computation.
     asp_atoms: tuple[str, ...] = ("CA", "CB", "CG", "OD1", "OD2")
 
 
@@ -79,13 +124,10 @@ class _DumpNames:
 
     in_model_dirname: str = "in"
     out_model_dirname: str = "out"
-    inter_model_dirname: str = "inter"
-    d1_model_dirname: str = "d1"
-    d2_model_dirname: str = "d2"
+    other_model_dirname: str = "other"
     meta_model_dirname: str = "meta"
 
     positions_ca: str = "positions_CA.txt"
-    # positions_df: str = "positions_DF.txt"
     distances: str = "distances.csv"
 
 
@@ -105,17 +147,13 @@ class _ColNames:
     dfg_cls_pred: str = "DFG_cls_pred"
     is_dfg_in: str = "is_DFG_in"
     is_dfg_out: str = "is_DFG_out"
-    is_dfg_inter: str = "is_DFG_inter"
+    is_dfg_other: str = "is_DFG_other"
     dfg_in_proba: str = "in_proba"
     dfg_out_proba: str = "out_proba"
-    dfg_inter_proba: str = "inter_proba"
+    dfg_other_proba: str = "other_proba"
     dfg_in_meta_prob: str = "in_meta_proba"
     dfg_out_meta_prob: str = "out_meta_prob"
-    dfg_inter_meta_prob: str = "inter_meta_prob"
-    dfg_d1: str = "Dist(p1=142,p2=52,a1='CZ',a2='CA',com=False)"
-    dfg_d2: str = "Dist(p1=142,p2=30,a1='CZ',a2='CA',com=False)"
-    dfg_d1_pred: str = "D1_pred"
-    dfg_d2_pred: str = "D2_pred"
+    dfg_other_meta_prob: str = "other_meta_prob"
 
     rmsd_ca: str = "RMSD_CA"
     rmsd_df: str = "RMSD_DF"
@@ -124,15 +162,15 @@ class _ColNames:
 
     @property
     def is_dfg_cols(self) -> tuple[str, str, str]:
-        return self.is_dfg_in, self.is_dfg_out, self.is_dfg_inter
+        return self.is_dfg_in, self.is_dfg_out, self.is_dfg_other
 
     @property
     def dfg_proba_cols(self) -> tuple[str, str, str]:
-        return self.dfg_in_proba, self.dfg_out_proba, self.dfg_inter_proba
+        return self.dfg_in_proba, self.dfg_out_proba, self.dfg_other_proba
 
     @property
     def dfg_meta_proba_cols(self) -> tuple[str, str, str]:
-        return self.dfg_in_meta_prob, self.dfg_out_meta_prob, self.dfg_inter_meta_prob
+        return self.dfg_in_meta_prob, self.dfg_out_meta_prob, self.dfg_other_meta_prob
 
     @property
     def dfg_cols(self) -> list[str]:
@@ -141,10 +179,6 @@ class _ColNames:
             self.dfg_pred,
             self.dfg_cls,
             self.dfg_cls_pred,
-            self.dfg_d1,
-            self.dfg_d2,
-            self.dfg_d1_pred,
-            self.dfg_d2_pred,
             *self.is_dfg_cols,
             *self.dfg_proba_cols,
             *self.dfg_meta_proba_cols,
