@@ -1,8 +1,11 @@
+"""
+Variables' definitions and calculation.
+"""
 import logging
 import typing as t
 from collections import abc
 from dataclasses import dataclass
-from itertools import chain
+from itertools import chain, combinations
 
 import pandas as pd
 from lXtractor.core.chain import ChainSequence, ChainStructure, Chain, ChainList
@@ -20,13 +23,13 @@ from lXtractor.variables import (
     LigandDist,
     LigandNames,
     LigandContactsCount,
+    AggDist,
 )
 from lXtractor.variables.base import StructureVariable, SequenceVariable
 from more_itertools import windowed
 
 from kinactive.config import PK_NAME
 
-# CT = t.TypeVar('CT', ChainSequence, ChainStructure)
 CT: t.TypeAlias = ChainSequence | ChainStructure
 VT: t.TypeAlias = SequenceVariable | StructureVariable
 
@@ -40,12 +43,58 @@ Results = t.NamedTuple(
         ("lig_vs", pd.DataFrame),
     ],
 )
+PocketPos = (
+    7,
+    8,
+    9,
+    10,
+    14,
+    15,
+    28,
+    30,
+    48,
+    61,
+    77,
+    78,
+    79,
+    80,
+    81,
+    83,
+    84,
+    87,
+    123,
+    125,
+    127,
+    128,
+    130,
+    140,
+    141,
+    142,
+)
 
 
-def _make_pdist(ps1, ps2, a1="CB", a2="CB"):
-    for i in ps1:
-        for j in ps2:
-            yield Dist(i, j, a1, a2)
+def _make_pdist(ps1, ps2, a1="CB", a2="CB", min_sep=1):
+    if ps2 is None:
+        for i, j in combinations(ps1, 2):
+            if abs(i - j) >= min_sep:
+                yield Dist(i, j, a1, a2)
+    else:
+        for i in ps1:
+            for j in ps2:
+                if abs(i - j) >= min_sep:
+                    yield Dist(i, j, a1, a2)
+
+
+def _make_pdist_agg(ps1, ps2, key, min_sep=1):
+    if ps2 is None:
+        for i, j in combinations(ps1, 2):
+            if abs(i - j) >= min_sep:
+                yield AggDist(i, j, key)
+    else:
+        for i in ps1:
+            for j in ps2:
+                if abs(i - j) >= min_sep:
+                    yield AggDist(i, j, key)
 
 
 def _make_pfp(ps, n_comp: int = 3):
@@ -57,30 +106,41 @@ def _make_pfp(ps, n_comp: int = 3):
 @dataclass
 class DefaultFeatures:
     """
-    Default feature set is based on PF00069 Pfam profile positions.
-    It includes:
-
-        #. SASA for each position.
-        #. Pseudo dihedral angles for each consecutive quadruplet.
-        #. Phi angles for each position except the very first one.
-        #. Psi angles for each position except the very last one.
-        #. Chi1 angles for each position.
-        #. Pairwise CB-CB distances between:
-
-            #. $\beta_3$-sheet and $\alpha C$-helix.
-            #. $\beta_3$-sheet and XDFGX region.
-            #. $\alpha C$-helix and XDFGX region.
-
-        #. $DFG_{Phe}-C\zeta$ -- $\alphaC_{Glu+4}-C\alpha$ distance.
-        #. $DFG_{Phe}-C\zeta$ -- $\beta_3_{Lys}-C\alpha$ distance.
+    A default feature set based on the PF00069 PK profile positions.
     """
 
-    xdfgx: tuple[int, ...] = tuple(range(140, 145))
-    b3_sheet: tuple[int, ...] = tuple(range(24, 31))
-    ac_helix: tuple[int, ...] = tuple(range(37, 57))
+    #: PK HMM profile positions
     profile_pos: tuple[int, ...] = tuple(range(1, 265))
+    #: xDFGx profile positions (DFG motif plus the two residues around).
+    xdfgx: tuple[int, ...] = tuple(range(140, 144))
+    #: HRD motif's profile positions.
+    hrd: tuple[int, int, int] = (121, 122, 123)
+    #: Activation loop profile positions.
+    al: tuple[int, ...] = tuple(range(135, 150))
+    #: B3 sheet profile positions.
+    b3_sheet: tuple[int, ...] = tuple(range(24, 31))
+    #: aC helix profile positions.
+    ac_helix: tuple[int, ...] = tuple(range(37, 57))
+    #: Pocket residues profile positions.
+    pocket: tuple[int, ...] = PocketPos
 
     def make_str_vs(self) -> tuple[StructureVariable, ...]:
+        """
+        Make a list of structural variables including::
+
+            #. SASA for each position.
+            #. Pseudo dihedral angles for each consecutive quadruplet.
+            #. Phi angles for each position except the very first one.
+            #. Psi angles for each position except the very last one.
+            #. Chi1 angles for each position.
+            #. Pairwise CB-CB distances between the pocket residues.
+            #. Distances from the pocket residues CB to the DFG-Asp CG atom.
+            #. Distances from the pocket residues CB to the DFG-Phe CZ atom.
+            #. A distance between the DFG-Asp CG and the DFG-Phe CZ
+            #. A distance between the B3-Lys NZ and aC-Glu CD
+
+        :return: A default set of structural variables.
+        """
         profile_pos = self.profile_pos
         return tuple(
             chain(
@@ -89,19 +149,23 @@ class DefaultFeatures:
                 (Phi(x) for x in profile_pos[1:]),
                 (Psi(x) for x in profile_pos[:-1]),
                 (Chi1(x) for x in profile_pos),
-                chain(
-                    _make_pdist(self.b3_sheet, self.ac_helix),
-                    _make_pdist(self.b3_sheet, self.xdfgx),
-                    _make_pdist(self.ac_helix, self.xdfgx),
-                    [
-                        Dist(142, 52, "CZ", "CA"),
-                        Dist(142, 30, "CZ", "CA"),
-                    ],
-                ),
+                _make_pdist(self.pocket, [141], a2="CG"),
+                _make_pdist(self.pocket, [142], a2="CZ"),
+                _make_pdist(self.pocket, None),
+                [Dist(141, 142, "CG", "CZ"), Dist(30, 48, "NZ", "CD")],
             )
         )
 
     def make_lig_vs(self) -> tuple[StructureVariable, ...]:
+        """
+        Make a default list of ligand variables including::
+
+            #. A count of ligand contacts per position.
+            #. A minimum position-wise distance to the closest ligand.
+            #. The closest contacting ligand's name per position.
+
+        :return: A default set of ligand variables.
+        """
         pos = self.profile_pos
         return tuple(
             chain(
@@ -112,6 +176,14 @@ class DefaultFeatures:
         )
 
     def make_seq_vs(self) -> tuple[SequenceVariable, ...]:
+        """
+        Make a default list of sequence variables including::
+
+            #. Sequence elements at positions 30, 48 and 140-144
+            #. ProtFP variables with three components for each profile position.
+
+        :return: A default set of sequence variables.
+        """
         return (
             SeqEl(30),
             SeqEl(48),
@@ -126,6 +198,15 @@ class DefaultFeatures:
         num_proc: int | None = None,
         verbose: bool = True,
     ) -> pd.DataFrame:
+        """
+        Calculate default sequence variables.
+
+        :param chains: A sequence of chain sequences.
+        :param map_name: A reference name.
+        :param num_proc: The number of CPUs to use.
+        :param verbose: Display progress bar.
+        :return: A table with calculated variables.
+        """
         return calculate(
             chains, self.make_seq_vs(), num_proc, verbose, map_name=map_name
         )
@@ -137,6 +218,15 @@ class DefaultFeatures:
         num_proc: int | None = None,
         verbose: bool = True,
     ) -> pd.DataFrame:
+        """
+        Calculate default structure variables.
+
+        :param chains: A sequence of chain structures.
+        :param map_name: A reference name.
+        :param num_proc: The number of CPUs to use.
+        :param verbose: Display progress bar.
+        :return: A table with calculated variables.
+        """
         return calculate(
             chains, self.make_str_vs(), num_proc, verbose, map_name=map_name
         )
@@ -148,6 +238,15 @@ class DefaultFeatures:
         num_proc: int | None = None,
         verbose: bool = True,
     ) -> pd.DataFrame:
+        """
+        Calculate default ligand variables.
+
+        :param chains: A sequence of chain structures.
+        :param map_name: A reference name.
+        :param num_proc: The number of CPUs to use.
+        :param verbose: Display progress bar.
+        :return: A table with calculated variables.
+        """
         return calculate(
             chains, self.make_lig_vs(), num_proc, verbose, map_name=map_name
         )
@@ -159,9 +258,23 @@ class DefaultFeatures:
         num_proc: int | None = None,
         verbose: bool = True,
     ) -> Results:
+        """
+        Calculate default variables. These include four sets::
+
+            #. A default set of sequence variables for canonical sequences.
+            #. A default set of sequence variables for structure sequences.
+            #. A default set of structure variables.
+            #. A default set of ligand variables.
+
+        :param chains: A sequence of chains.
+        :param map_name: A reference name.
+        :param num_proc: The number of CPUs to use.
+        :param verbose: Display progress bar.
+        :return: A table with calculated variables.
+        """
         if not isinstance(chains, ChainList):
             chains = ChainList(chains)
-        kw = {"map_name": map_name, "num_proc": num_proc, "verbose": verbose}
+        kw = {"map_name": map_name, "verbose": verbose}
 
         LOGGER.info("Calculating sequence variables on canonical seqs")
         df_can_seq = self.calculate_seq_vs(chains.sequences, **kw)
@@ -171,13 +284,15 @@ class DefaultFeatures:
         df_str_seq = self.calculate_seq_vs(chains.structure_sequences, **kw)
         LOGGER.info(f"Structure sequences features shape: {df_str_seq.shape}")
 
-        LOGGER.info("Calculating structure variables")
-        df_str = self.calculate_str_vs(chains.structures, **kw)
-        LOGGER.info(f"Structure features shape: {df_str.shape}")
-
         LOGGER.info("Calculating ligand variables")
         df_lig = self.calculate_lig_vs(chains.structures, **kw)
         LOGGER.info(f"Ligand features shape: {df_lig.shape}")
+
+        kw["num_proc"] = num_proc
+
+        LOGGER.info("Calculating structure variables")
+        df_str = self.calculate_str_vs(chains.structures, **kw)
+        LOGGER.info(f"Structure features shape: {df_str.shape}")
 
         LOGGER.info("Finished calculations")
 
@@ -191,6 +306,17 @@ def calculate(
     verbose: bool = True,
     **kwargs,
 ) -> pd.DataFrame:
+    """
+    Calculate variables and aggregate the results.
+
+    :param chains: A sequence of `Chain*`-type objects.
+    :param vs: A sequence of variables to calculate.
+    :param num_proc: A number of processors to use for the calculation.
+    :param verbose: Display progress bar.
+    :param kwargs: Passed to the :meth:`Manager.calculate`
+        (see ``lXtractor`` docs).
+    :return:
+    """
     manager = Manager(verbose=verbose)
     calculator = GenericCalculator(num_proc=num_proc)
     results = manager.calculate(chains, vs, calculator, **kwargs)
