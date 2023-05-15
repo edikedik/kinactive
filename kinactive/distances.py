@@ -245,6 +245,9 @@ class DistanceMatrix:
             yield chunk.pop()
         yield df[ColNames.id_mob].iloc[-1]
 
+    def fetch(self):
+        raise NotImplementedError
+
 
 def covered_pos(s: ChainStructure, ref_name: str) -> abc.Iterator[int]:
     """
