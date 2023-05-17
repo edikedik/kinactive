@@ -27,6 +27,7 @@ dependencies = [
     "more_itertools",
     "pandas",
     "sklearn",
+    "optuna",
     "eboruta==0.1"
 ]
 dynamic = ["version"]
