@@ -20,14 +20,14 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dependencies = [
-    "lXtractor",
+    "lXtractor==0.1",
     "xgboost",
     "toolz",
     "tqdm",
     "more_itertools",
     "pandas",
     "sklearn",
-    "eboruta"
+    "eboruta==0.1"
 ]
 dynamic = ["version"]
 
