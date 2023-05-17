@@ -1,5 +1,0 @@
-D1_pred
-D2_pred
-in_proba
-out_proba
-inter_proba
