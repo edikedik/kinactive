@@ -1,5 +1,5 @@
-kinactive
-=========
+API docs
+========
 
 .. toctree::
    :maxdepth: 4
