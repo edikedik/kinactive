@@ -1,3 +1,6 @@
+"""
+A :class:`DB` class for the PK data collection creation and io.
+"""
 import logging
 import operator as op
 import typing as t
@@ -9,18 +12,17 @@ from pathlib import Path
 import lXtractor.core.chain.tree as chain_tree
 import lXtractor.core.config as lx_cfg
 from lXtractor.core.chain import (
+    Chain,
+    ChainIO,
     ChainInitializer,
     ChainList,
     ChainSequence,
     ChainStructure,
-    Chain,
-    ChainIO,
 )
-from lXtractor.ext import PDB, PyHMMer, SIFTS, fetch_uniprot
-from lXtractor.protocols import filter_by_method
+from lXtractor.ext import PDB, PyHMMer, SIFTS, fetch_uniprot, filter_by_method
 from lXtractor.util import get_files, read_fasta, write_fasta
 from more_itertools import ilen, take
-from toolz import keymap, keyfilter, groupby, itemmap, curry
+from toolz import curry, groupby, itemmap, keyfilter, keymap
 from tqdm.auto import tqdm
 
 from kinactive.config import DBConfig
@@ -30,10 +32,14 @@ LOGGER = logging.getLogger(__name__)
 
 
 # TODO: some object IDs are duplicated:
+# This stems from the issue of chimeric sequences.
+# However, such sequences should not pass the filtering when canonical/structure
+# seqs are compared.
 # ['ChainStructure(PK_1|10-260<-(5UFU:A|1-375))',
 #  'ChainStructure(PK_1|136-354<-(7APJ:A|1-385))',
 #  'ChainStructure(PK_1|38-323<-(3U87:A|1-334))',
 #  'ChainStructure(PK_1|38-323<-(3U87:B|1-334))']
+# TODO: include UniProt metadata
 
 
 def _get_remaining(names: abc.Iterable[str], dir_: Path) -> set[str]:
@@ -118,7 +124,7 @@ class DB:
         parsed_seqs: abc.Iterable[tuple[str, str]] = read_fasta(StringIO(raw_seqs))
         if self.cfg.verbose:
             parsed_seqs = tqdm(parsed_seqs, desc="Saving fetched sequences")
-        for (header, seq) in parsed_seqs:
+        for header, seq in parsed_seqs:
             id_ = header.split("|")[1]
             write_fasta([(header, seq)], self.cfg.seq_dir / f"{id_}.fasta")
 
@@ -136,12 +142,15 @@ class DB:
         pdb = self._load_pdb()
         return filter_by_method(sifts.pdb_ids, pdb=pdb, method="X-ray")
 
-    def build(self) -> ChainList[Chain]:
+    def build(
+        self,
+    ) -> ChainList[Chain]:
         """
-        Build a new kinactive database.
+        Build a new lXt-PK data collection.
 
-        :return: :class:`Chain` objects having at least one child PK domain
-            with at least one PK domain structure passing filtering thresholds.
+        :return: A :class:`ChainList` of :class:`Chain` objects having at least
+            one child PK domain with at least one PK domain structure passing
+            the filtering thresholds.
         """
 
         def match_seq(s: ChainStructure) -> ChainStructure:
@@ -180,9 +189,11 @@ class DB:
         LOGGER.info(f"{len(fetch_ids)} remaining sequences to fetch")
         self._fetch_seqs(fetch_ids)
 
-        # Read and filter fetched seqs
+        # Read
         seqs = self._read_seqs(sifts.uniprot_ids)
         LOGGER.info(f"Got {len(seqs)} seqs from {self.cfg.seq_dir}")
+
+        # Filter sequences by size
         min_size, max_size = self.cfg.min_seq_size, self.cfg.max_seq_size
         seqs = seqs.filter(lambda s: min_size <= len(s) <= max_size)
         LOGGER.info(f"Filtered to {len(seqs)} seqs in [{min_size}, {max_size}]")
@@ -202,10 +213,6 @@ class DB:
         annotated_num = sum(1 for _ in ann)
         seqs = seqs.filter(lambda x: len(x.children) > 0)
         LOGGER.info(f"Found {annotated_num} PK domains within {len(seqs)} seqs")
-
-        # seqs = ChainList(take(4, seqs))
-        # seqs = ChainList(islice(seqs, 150, 200))
-        # seqs = seqs.filter(lambda x: 'Q03145' in x.id)
 
         # Get IDs UniProt IDs and corresponding PDB Chains
         uni_ids = [x.id.split("|")[1] for x in seqs]
@@ -264,6 +271,7 @@ class DB:
                     )
                     pk_name = self.cfg.pk_map_name
                     child.seq.add_seq(pk_name, seq_child[pk_name])
+                    child.seq.meta = seq_child.meta
                 except Exception as e:
                     raise RuntimeError(
                         f"Unexpected exception when trying to init child {seq_child} "
@@ -359,6 +367,11 @@ class DB:
         return chains
 
     def fetch(self):
+        """
+        Fetch an already prepared data collection.
+
+        :return:
+        """
         # TODO: implement fetching and unpacking
         raise NotImplementedError
 
