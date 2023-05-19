@@ -12,6 +12,7 @@ from random import sample
 
 import lXtractor.core.chain.tree as chain_tree
 import lXtractor.core.config as lx_cfg
+import pandas as pd
 from lXtractor.core.chain import (
     Chain,
     ChainIO,
@@ -21,12 +22,12 @@ from lXtractor.core.chain import (
     ChainStructure,
 )
 from lXtractor.ext import PDB, PyHMMer, SIFTS, fetch_uniprot, filter_by_method
-from lXtractor.util import get_files, read_fasta, write_fasta, apply
-from more_itertools import ilen, take
+from lXtractor.util import get_files, read_fasta, write_fasta
+from more_itertools import ilen, take, consume
 from toolz import curry, groupby, itemmap, keyfilter, keymap
 from tqdm.auto import tqdm
 
-from kinactive.config import DBConfig
+from kinactive.config import DBConfig, DumpNames
 
 T = t.TypeVar("T")
 CT_: t.TypeAlias = Chain | ChainSequence | ChainStructure
@@ -75,6 +76,23 @@ def _filter_by_size(
 
 def _rm_solvent(structures: list[ChainStructure]) -> list[ChainStructure]:
     return [s.rm_solvent() for s in structures]
+
+
+def _drop_all_na(df: pd.DataFrame) -> pd.DataFrame:
+    to_drop = [c for c in df.columns if df[c].isna().sum() == len(df)]
+    return df.drop(columns=to_drop)
+
+
+def _split_summary(df: pd.DataFrame) -> tuple[pd.DataFrame, ...]:
+    idx_parent = df.ParentID.isna()
+    idx_str = df.Structure == True
+    splits = (
+        df[idx_parent & ~idx_str],
+        df[idx_parent & idx_str],
+        df[~idx_parent & ~idx_str],
+        df[~idx_parent & idx_str],
+    )
+    return tuple(map(_drop_all_na, splits))
 
 
 class DB:
@@ -290,7 +308,7 @@ class DB:
                 val_callbacks=[_rm_solvent, curry(_filter_by_size)(cfg=self.cfg)],
                 num_proc_read_str=self.cfg.init_cpus,
                 num_proc_map_numbering=self.cfg.init_map_numbering_cpus,
-                add_to_children=True
+                add_to_children=True,
             )
         ).filter(lambda c: len(c.structures) > 0)
         LOGGER.info(f"Initialized {len(chains)} `Chain` objects.")
@@ -334,8 +352,10 @@ class DB:
         self,
         dest: Path | None = None,
         chains: abc.Iterable[Chain] | None = None,
+        *,
         overwrite: bool = False,
-    ) -> abc.Iterator[Path]:
+        summary: bool = True,
+    ) -> None:
         """
         Save DB sequence to file system.
 
@@ -343,6 +363,7 @@ class DB:
         :param chains: Manual chains input to save. If ``None``, will use
             :attr:`chains`.
         :param overwrite: Overwrite existing data in ``dest``.
+        :param summary: Compose and save summaries to ``dest``.
         :return: An iterator over paths of successfully saved chains. Consume
             to trigger saving.
         """
@@ -357,7 +378,12 @@ class DB:
         io = ChainIO(
             num_proc=self.cfg.io_cpus, verbose=self.cfg.verbose, tolerate_failures=False
         )
-        yield from io.write(chains, base=dest)
+        consume(io.write(chains, base=dest))
+        if summary:
+            summary = self.chains.summary(children=True, structures=True)
+            for df, name in zip(_split_summary(summary), DumpNames.summary_file_names):
+                df.to_csv(dest / name, index=False)
+                LOGGER.info(f"Saved summary file {name} to {dest}")
 
     def load(
         self, dump: Path | abc.Iterable[Path], n: int | None = None

@@ -130,6 +130,20 @@ class _DumpNames:
     positions_ca: str = "positions_CA.txt"
     distances: str = "distances.csv"
 
+    summary_parent_seq = "initial_seq_summary.csv"
+    summary_parent_str = "initial_str_summary.csv"
+    summary_child_seq = "domain_seq_summary.csv"
+    summary_child_str = "domain_str_summary.csv"
+
+    @property
+    def summary_file_names(self) -> tuple[str, str, str, str]:
+        return (
+            self.summary_parent_seq,
+            self.summary_parent_str,
+            self.summary_child_seq,
+            self.summary_child_str,
+        )
+
 
 @dataclass
 class _ModelPaths:
