@@ -23,7 +23,7 @@ from lXtractor.core.chain import (
 )
 from lXtractor.ext import PDB, PyHMMer, SIFTS, fetch_uniprot, filter_by_method
 from lXtractor.util import get_files, read_fasta, write_fasta
-from more_itertools import ilen, take, consume
+from more_itertools import ilen, take, consume, unzip
 from toolz import curry, groupby, itemmap, keyfilter, keymap
 from tqdm.auto import tqdm
 
@@ -223,11 +223,14 @@ class DB:
 
         # Fetch SIFTS UniProt seqs
         if uniprot_ids:
-            ids = list(filter(lambda x: x.isin(uniprot_ids), sifts.uniprot_ids))
+            ids = list(filter(lambda x: x in uniprot_ids, sifts.uniprot_ids))
             LOGGER.info(
-                f"Filtered to {len(ids)} out of {len(uniprot_ids)} initially provided "
-                f"UniProt IDs."
+                f"Filtered to {len(ids)} out of {len(sifts.uniprot_ids)} initial IDs "
+                f"contained in SIFTS using {len(uniprot_ids)} reference IDs."
             )
+            missing = set(uniprot_ids) - set(ids)
+            if missing:
+                LOGGER.warning(f"{len(missing)} IDs were missing in SIFTS: {missing}")
         else:
             ids = sifts.uniprot_ids
 
@@ -236,7 +239,7 @@ class DB:
         self._fetch_seqs(fetch_ids)
 
         # Read
-        seqs = self._read_seqs(sifts.uniprot_ids)
+        seqs = self._read_seqs(ids)
         LOGGER.info(f"Got {len(seqs)} seqs from {self.cfg.seq_dir}")
 
         # Filter sequences by size
@@ -270,11 +273,27 @@ class DB:
 
         # Filter PDB IDs to provided list
         if pdb_chain_ids:
-            pdb_chains = list(filter(lambda x: x in pdb_chain_ids, pdb_chains))
+            num_init = ilen(chain.from_iterable(pdb_chains))
+            pdb_chains = [
+                list(filter(lambda x: x in pdb_chain_ids, chain_group))
+                for chain_group in pdb_chains
+            ]
             LOGGER.info(
-                f"Filtered to {len(pdb_chains)} out of {len(pdb_chain_ids)} "
-                f"initially provided PDB chain IDs."
+                f"Filtered to {ilen(chain.from_iterable(pdb_chains))} out "
+                f"of {num_init} initially mapped PDB chains "
+                f"({len(pdb_chain_ids)} reference IDs were provided for filtering)."
             )
+            filtered_pairs = list(
+                filter(lambda x: len(x[1]) > 1, zip(uni_ids, pdb_chains, strict=True))
+            )
+            LOGGER.info(
+                f"Filtered to {len(filtered_pairs)} sequences mapped to at least one "
+                f"PDB chain."
+            )
+            if not filtered_pairs:
+                LOGGER.warning("All sequences were filtered out. Terminating...")
+                return ChainList([])
+            uni_ids, pdb_chains = map(list, unzip(filtered_pairs))
 
         # Filter PDB IDs to X-ray structures
         pdb_ids = {x.split(":")[0] for x in chain.from_iterable(pdb_chains)}
