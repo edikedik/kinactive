@@ -20,13 +20,13 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dependencies = [
-    "lXtractor==0.1",
+    "lXtractor==0.1.1",
     "xgboost",
     "toolz",
     "tqdm",
     "more_itertools",
     "pandas",
-    "sklearn",
+    "scikit-learn",
     "optuna",
     "eboruta==0.1"
 ]

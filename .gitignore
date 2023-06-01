@@ -10,6 +10,8 @@ data
 .idea/*
 todo.md
 
+.ipynb_checkpoints/
+
 # User-specific stuff
 .idea/**/workspace.xml
 .idea/**/tasks.xml
