@@ -5,9 +5,11 @@ KinActive
    :maxdepth: 2
    :caption: Contents:
 
-   build <notebooks/build_raw_database>
-   features <notebooks/calculate_default_variables>
-   modules
+   intro
+   fetching
+   Build a new `lXt-PK` collection <notebooks/build_raw_database>
+   Calculate default variables <notebooks/calculate_default_variables>
+   kinactive
 
 
 Indices and tables

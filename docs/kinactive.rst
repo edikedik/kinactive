@@ -1,4 +1,4 @@
-kinactive package
+API documentation
 =================
 
 .. toctree::
