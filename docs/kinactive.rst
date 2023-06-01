@@ -1,19 +1,8 @@
 kinactive package
 =================
 
-Subpackages
------------
-
 .. toctree::
-   :maxdepth: 4
-
-   kinactive.resources
-
-Submodules
-----------
-
-.. toctree::
-   :maxdepth: 4
+   :maxdepth: 2
 
    kinactive.config
    kinactive.db
@@ -21,11 +10,4 @@ Submodules
    kinactive.features
    kinactive.io
    kinactive.model
-
-Module contents
----------------
-
-.. automodule:: kinactive
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   kinactive.resources

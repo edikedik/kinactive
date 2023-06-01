@@ -5,7 +5,7 @@
 docs/_*
 
 data
-*.ipynb
+notebooks/*.ipynb
 
 .idea/*
 todo.md
