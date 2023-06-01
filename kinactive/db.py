@@ -20,6 +20,8 @@ from lXtractor.core.chain import (
     ChainList,
     ChainSequence,
     ChainStructure,
+    read_chains,
+    ChainIOConfig,
 )
 from lXtractor.ext import PDB, PyHMMer, SIFTS, fetch_uniprot, filter_by_method
 from lXtractor.util import get_files, read_fasta, write_fasta
@@ -405,33 +407,40 @@ class DB:
                 LOGGER.info(f"Saved summary file {name} to {dest}")
 
     def load(
-        self, dump: Path | abc.Iterable[Path], n: int | None = None
+        self, dump: Path | abc.Iterable[Path]
     ) -> ChainList[Chain]:
         """
         Load prepared db.
 
         :param dump: Path with dumped :class:`Chain`s.
-        :param n: Load `n` first objects. Useful for testing.
         :return: A chain list with initialized :class:`Chain`s.
         """
-        io = ChainIO(
-            num_proc=self.cfg.io_cpus,
+
+        if isinstance(dump, Path):
+            dump = dump.glob("*")
+
+        dump = list(dump)
+        LOGGER.info(f"Got {len(dump)} initial paths to read")
+
+        chains = read_chains(
+            dump,
+            children=True,
+            seq_cfg=ChainIOConfig(verbose=self.cfg.verbose),
+            str_cfg=ChainIOConfig(verbose=self.cfg.verbose, num_proc=self.cfg.io_cpus),
+        )
+        chains = chains.apply(
+            chain_tree.recover,
             verbose=self.cfg.verbose,
-            tolerate_failures=True,
+            desc="Recovering ancestry for sequences and structures",
         )
-        chain_read_it = io.read_chain(
-            dump, callbacks=[chain_tree.recover], search_children=True
-        )
-        if n is not None:
-            chain_read_it = take(n, chain_read_it)
-
-        chains = ChainList(chain_read_it)
-
         if len(chains) > 0:
             LOGGER.info(f"Parsed {len(chains)} `Chain`s")
             self._chains = chains
         else:
             LOGGER.warning(f"Found no `Chain`s in {dump}")
+
+        self._chains = chains
+
         return chains
 
     def fetch(self):
