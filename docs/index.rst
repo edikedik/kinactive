@@ -7,7 +7,7 @@ KinActive
 
    intro
    fetching
-   Build a new `lXt-PK` collection <notebooks/build_raw_database>
+   Build a new lXt-PK collection <notebooks/build_raw_database>
    Calculate default variables <notebooks/calculate_default_variables>
    kinactive
 
