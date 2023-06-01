@@ -48,7 +48,7 @@ html_static_path = ['_static']
 
 # Required theme setup
 # html_theme = 'sphinx_material'
-html_theme = 'sphinx-rtd-theme'
+html_theme = 'sphinx_rtd_theme'
 
 # Set link name generated in the top bar.
 html_title = 'KinActive'
