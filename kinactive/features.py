@@ -6,9 +6,11 @@ import typing as t
 from collections import abc
 from dataclasses import dataclass
 from itertools import chain, combinations
+from pathlib import Path
 
 import pandas as pd
 from lXtractor.core.chain import ChainSequence, ChainStructure, Chain, ChainList
+from lXtractor.util import get_files
 from lXtractor.variables import (
     GenericCalculator,
     Manager,
@@ -28,7 +30,7 @@ from lXtractor.variables import (
 from lXtractor.variables.base import StructureVariable, SequenceVariable
 from more_itertools import windowed
 
-from kinactive.config import PK_NAME
+from kinactive.config import PK_NAME, DumpNames
 
 CT: t.TypeAlias = ChainSequence | ChainStructure
 VT: t.TypeAlias = SequenceVariable | StructureVariable
@@ -39,8 +41,8 @@ Results = t.NamedTuple(
     [
         ("seq_vs", pd.DataFrame),
         ("str_seq_vs", pd.DataFrame),
-        ("str_vs", pd.DataFrame),
         ("lig_vs", pd.DataFrame),
+        ("str_vs", pd.DataFrame),
     ],
 )
 PocketPos = (
@@ -257,6 +259,8 @@ class DefaultFeatures:
         map_name: str = PK_NAME,
         num_proc: int | None = None,
         verbose: bool = True,
+        base: Path | None = None,
+        overwrite: bool = False,
     ) -> Results:
         """
         Calculate default variables. These include four sets::
@@ -270,33 +274,73 @@ class DefaultFeatures:
         :param map_name: A reference name.
         :param num_proc: The number of CPUs to use.
         :param verbose: Display progress bar.
-        :return: A table with calculated variables.
+        :param base: Base path to save the results to. If not provided, the
+            results are returned but not saved.
+        :param overwrite: Overwrite existing files. If False, will skip the
+            calculation of existing variables.
+        :return: A named tuple with calculated variables' tables.
         """
         if not isinstance(chains, ChainList):
             chains = ChainList(chains)
         kw = {"map_name": map_name, "verbose": verbose}
 
-        LOGGER.info("Calculating sequence variables on canonical seqs")
-        df_can_seq = self.calculate_seq_vs(chains.sequences, **kw)
-        LOGGER.info(f"Canonical sequences features shape: {df_can_seq.shape}")
-
-        LOGGER.info("Calculating sequence variables on structure seqs")
-        df_str_seq = self.calculate_seq_vs(chains.structure_sequences, **kw)
-        LOGGER.info(f"Structure sequences features shape: {df_str_seq.shape}")
-
-        LOGGER.info("Calculating ligand variables")
-        df_lig = self.calculate_lig_vs(chains.structures, **kw)
-        LOGGER.info(f"Ligand features shape: {df_lig.shape}")
-
-        kw["num_proc"] = num_proc
-
-        LOGGER.info("Calculating structure variables")
-        df_str = self.calculate_str_vs(chains.structures, **kw)
-        LOGGER.info(f"Structure features shape: {df_str.shape}")
+        staged = [
+            (
+                self.calculate_seq_vs,
+                chains.sequences,
+                "canonical seqs",
+                DumpNames.canonical_seq_vs,
+            ),
+            (
+                self.calculate_seq_vs,
+                chains.structure_sequences,
+                "structure seqs",
+                DumpNames.structure_seq_vs,
+            ),
+            (
+                self.calculate_lig_vs,
+                chains.structures,
+                "ligand variables",
+                DumpNames.ligand_vs,
+            ),
+            (
+                self.calculate_str_vs,
+                chains.structures,
+                "structure variables",
+                DumpNames.structure_vs,
+            ),
+        ]
+        dfs = []
+        for meth, objs, desc, name in staged:
+            if "seqs" in desc:
+                desc = f"Calculating sequence variables on {desc}"
+            else:
+                desc = f"Calculating {desc}"
+            # Use multiprocessing only for structure variables
+            if "structure variables" in desc:
+                kw["num_proc"] = num_proc
+            # Check if already exists
+            df = None
+            if base is not None and base.exists():
+                files = get_files(base)
+                if name in files and not overwrite:
+                    LOGGER.info(f"Reading already calculated {name}")
+                    df = pd.read_csv(files[name])
+            # Calculate if wasn't loaded
+            if df is None:
+                LOGGER.info(desc)
+                df = meth(objs, **kw)
+                LOGGER.info(f"Resulting shape: {df.shape}")
+            dfs.append(df)
+            # Save if base path was provided
+            if base is not None:
+                base.mkdir(exist_ok=True)
+                df.to_csv(base / name, index=False)
+                LOGGER.info(f"Saved {name} to {base}")
 
         LOGGER.info("Finished calculations")
 
-        return Results(df_can_seq, df_str_seq, df_str, df_lig)
+        return Results(*dfs)
 
 
 def calculate(

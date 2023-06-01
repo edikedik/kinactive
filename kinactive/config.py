@@ -135,6 +135,11 @@ class _DumpNames:
     summary_child_seq = "domain_seq_summary.csv"
     summary_child_str = "domain_str_summary.csv"
 
+    canonical_seq_vs = "defaults_can_seq_vs.csv"
+    structure_seq_vs = "defaults_str_seq_vs.csv"
+    ligand_vs = "default_lig_vs.csv"
+    structure_vs = "default_str_vs.csv"
+
     @property
     def summary_file_names(self) -> tuple[str, str, str, str]:
         return (
