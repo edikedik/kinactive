@@ -1,7 +1,6 @@
 Introduction
 ============
 
-
 ``KinActive`` is a package to explore the structural kinome.
 It allows to prepare/load/explore the ``lXt-PK`` data collection and use the
 classifier models predicting DFG and active/inactive states of a PK conformation
@@ -34,8 +33,9 @@ Using the data
 --------------
 
 ``KinActive`` is not supplied with the raw data.
-One may fetch the data accompanying the paper (see `Fetching the data`_) or
-build a new raw collection (see `Building an initial collection of PK domains`_).
+One may fetch the data accompanying the paper
+(see :doc:`Fetching the data <notebooks/build_raw_database>`) or build a new
+raw collection (see :doc:`the notebook here <notebooks/calculate_default_variables>`).
 
 Once the data is obtained, loading becomes trivial:
 
