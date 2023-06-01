@@ -83,7 +83,7 @@ To calculate the default variables for loaded ``chains``.
     variables via the ``num_proc`` parameters.
 
 .. note::
-    See `Calculate default variables <notebooks/calculate_default_variables`
+    See :doc:`Calculate default variables <notebooks/calculate_default_variables>`
     for an example of variables' calculation.
 
 Calculating non-default variables is a bit more involved and is covered in
@@ -108,8 +108,8 @@ access the :attr:`features <kinactive.model.KinActiveClassifier.model>` and
 model for predictions and so on.
 
 The second line will load the :class:`kinactive.model.DFGClassifier` model.
-It comprises three :class:`kinactive.model.KinActiveClassifier`s and a logistic
-regression meta-classifier outputting final predictions.
+It comprises three :class:`kinactive.model.KinActiveClassifier` objects and
+a logistic regression meta-classifier outputting final predictions.
 
 Both models can be used in the same manner. They require a dataset with
 :meth:`kinactive.model.KinActiveClassifier.features` and
