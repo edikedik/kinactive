@@ -9,12 +9,14 @@ import re
 import typing as t
 from abc import ABCMeta, abstractmethod
 from collections import abc
+from itertools import chain
 from statistics import mean
 
 import numpy as np
 import optuna
 import pandas as pd
 from eBoruta import eBoruta
+from more_itertools import unique_everseen
 from sklearn.metrics import f1_score, r2_score
 from toolz import curry
 from tqdm.auto import tqdm
@@ -537,6 +539,23 @@ class DFGClassifier(ModelBase):
         self,
     ) -> list[str]:
         return self.models.meta.targets
+
+    @property
+    def dfg_features(self) -> list[str]:
+        """
+        :return: A list of features used by the XGBoost binary "in", "out", and
+            "other" models.
+        """
+        return list(
+            unique_everseen(chain.from_iterable(m.features for m in self.models[:3]))
+        )
+
+    @property
+    def meta_features(self) -> list[str]:
+        """
+        :return: A list of features used by the "meta" LR classifier.
+        """
+        return self.models.meta.features
 
     @property
     def proba_names(self) -> list[str]:
