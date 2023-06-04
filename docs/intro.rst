@@ -16,7 +16,7 @@ It is recommended to first create a ``conda`` virtual environment::
 
 See the `conda docs`_ for further details.
 
-The package is installable via ``pip``::
+The package is installable via ``pip``. From Pypi::
 
     pip install kinactive
 
@@ -37,7 +37,7 @@ One may fetch the data accompanying the paper (see
 :doc:`Fetching the data <fetching>`) or build a new raw collection (see
 :doc:`Build a new lXt-PK collection <notebooks/build_raw_database>`).
 
-Once the data is obtained, loading becomes trivial:
+Once the data is obtained, you can load the chains as:
 
 .. code-block:: python
 
@@ -92,7 +92,7 @@ the `lXtractor docs`_.
 Using the models
 ----------------
 
-Loading the models is trivial:
+To load the models, use:
 
 .. code-block:: python
 
@@ -121,6 +121,12 @@ the ``df`` variable to encapsulate such a dataset (as a `pandas DataFrame`_).
     ka_labels = ka.predict(df)
     dfg_labels = dfg.predict(df)
 
+.. hint::
+    :meth:`kinactive.model.DFGclassifier.predict_full` and
+    :meth:`kinactive.model.KinActiveClassifier.predict_full` will preserve
+    individual predictors' outputs and add columns to an initial
+    `pandas DataFrame`_).
+
 Building the distance matrix
 ----------------------------
 
@@ -132,7 +138,7 @@ with four columns: ``[ID1, ID2, RMSD_CA, RMSD_DFG]``.
 
 Assuming the ``chains`` were loaded as described in :doc:`Using the data`, i.e.,
 at the level of initial ``Chain``, we'll access the structure domains and supply
-them into
+them into :meth:`kinactive.distances.DistanceMatrix.build`.
 
 .. code-block:: python
 
@@ -143,6 +149,12 @@ them into
 .. hint::
     Similar to :class:`kinactive.db.DB`, there is a config dataclass allowing
     to customize the calculation process. See :class:`kinactive.config.MatrixConfig`.
+
+What's next?
+------------
+
+If you are interested in making a similar data collection or annotating your
+PK domains, check out the :doc:`tutorial <notebooks/tutorial>`.
 
 .. _conda docs: https://docs.anaconda.com/
 .. _mafft docs: https://mafft.cbrc.jp/alignment/software/
