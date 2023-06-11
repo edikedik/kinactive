@@ -20,7 +20,7 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dependencies = [
-    "lXtractor==0.1.1",
+    "lXtractor>=0.1.1",
     "xgboost",
     "toolz",
     "tqdm",
