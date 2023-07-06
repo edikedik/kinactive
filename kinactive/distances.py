@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 from lXtractor.core.chain import ChainList, ChainStructure
 from lXtractor.core.exceptions import MissingData
-from lXtractor.protocols import SupOutputFlex, SupOutputStrict, superpose_pairwise
+from lXtractor.protocols.superpose import superpose_pairwise, SuperposeOutput
 
 from kinactive.config import (
     ColNames,
@@ -81,7 +81,7 @@ class DistanceMatrix:
         )
         LOGGER.info(
             f"Filtered to {len(structures)} with CA atoms specified by super positions "
-            f"and DFG-Asp, DFG-Phe present"
+            f"and DFG-Asp, DFG-Phe present."
         )
         results = superpose_pairwise(
             structures,
@@ -153,7 +153,7 @@ class DistanceMatrix:
         choose_ref_by: str = ColNames.rmsd_ca,
         key: str = "min",
         **kwargs,
-    ) -> list[SupOutputStrict] | list[SupOutputFlex]:
+    ) -> list[SuperposeOutput]:
         """
         Superpose a group of structures to a single reference structure.
         The latter is a structure having minimum average distance to other

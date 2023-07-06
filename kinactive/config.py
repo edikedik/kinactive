@@ -42,6 +42,9 @@ class DBConfig:
     init_cpus: int = 1
     #: #cpus for pairwise sequence alignments. Increase to max number possible.
     init_map_numbering_cpus: int = 1
+    #: #cpus for adding structures to a chain. Valid if `init_map_numbering_cpus`
+    #: is > 1.
+    init_add_structure_cpus: int = 1
 
     #: A path to the PK profile (supplied with the package)
     profile: Path = Path(__file__).parent / "resources" / "Pkinase.hmm"
@@ -67,7 +70,7 @@ class DBConfig:
     max_seq_size: int = 3000
 
     #: PDB files format.
-    pdb_fmt: str = "cif"
+    pdb_fmt: str = "mmtf.gz"
     #: The number of threads to use when fetching data from the PDB.
     pdb_num_fetch_threads: int = 10
     #: The minimum structure size (in residues) to filter raw structures.

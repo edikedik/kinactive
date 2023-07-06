@@ -22,10 +22,10 @@ from lXtractor.variables import (
     Psi,
     Chi1,
     SASA,
-    LigandDist,
-    LigandNames,
-    LigandContactsCount,
     AggDist,
+    ClosestLigandDist,
+    ClosestLigandNames,
+    ClosestLigandContactsCount,
 )
 from lXtractor.variables.base import StructureVariable, SequenceVariable
 from more_itertools import windowed
@@ -171,9 +171,9 @@ class DefaultFeatures:
         pos = self.profile_pos
         return tuple(
             chain(
-                (LigandContactsCount(p) for p in pos),
-                (LigandDist(p) for p in pos),
-                (LigandNames(p) for p in pos),
+                (ClosestLigandContactsCount(p) for p in pos),
+                (ClosestLigandDist(p) for p in pos),
+                (ClosestLigandNames(p) for p in pos),
             )
         )
 

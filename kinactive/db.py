@@ -10,7 +10,6 @@ from itertools import chain
 from pathlib import Path
 from random import sample
 
-import lXtractor.core.chain.tree as chain_tree
 import lXtractor.core.config as lx_cfg
 import pandas as pd
 from lXtractor.core.chain import (
@@ -25,7 +24,7 @@ from lXtractor.core.chain import (
 )
 from lXtractor.ext import PDB, PyHMMer, SIFTS, fetch_uniprot, filter_by_method
 from lXtractor.util import get_files, read_fasta, write_fasta
-from more_itertools import ilen, take, consume, unzip
+from more_itertools import ilen, consume, unzip
 from toolz import curry, groupby, itemmap, keyfilter, keymap
 from tqdm.auto import tqdm
 
@@ -329,6 +328,7 @@ class DB:
                 val_callbacks=[_rm_solvent, curry(_filter_by_size)(cfg=self.cfg)],
                 num_proc_read_str=self.cfg.init_cpus,
                 num_proc_map_numbering=self.cfg.init_map_numbering_cpus,
+                num_proc_add_structure=self.cfg.init_add_structure_cpus,
                 add_to_children=True,
             )
         ).filter(lambda c: len(c.structures) > 0)
@@ -364,6 +364,7 @@ class DB:
 
         for c in chains.collapse_children():
             c.transfer_seq_mapping(self.cfg.pk_map_name)
+            c.seq.children = ChainList([])
 
         self._chains = chains
 
@@ -406,9 +407,7 @@ class DB:
                 df.to_csv(dest / name, index=False)
                 LOGGER.info(f"Saved summary file {name} to {dest}")
 
-    def load(
-        self, dump: Path | abc.Iterable[Path]
-    ) -> ChainList[Chain]:
+    def load(self, dump: Path | abc.Iterable[Path]) -> ChainList[Chain]:
         """
         Load prepared db.
 
@@ -428,11 +427,11 @@ class DB:
             seq_cfg=ChainIOConfig(verbose=self.cfg.verbose),
             str_cfg=ChainIOConfig(verbose=self.cfg.verbose, num_proc=self.cfg.io_cpus),
         )
-        chains = chains.apply(
-            chain_tree.recover,
-            verbose=self.cfg.verbose,
-            desc="Recovering ancestry for sequences and structures",
-        )
+        # chains = chains.apply(
+        #     chain_tree.recover,
+        #     verbose=self.cfg.verbose,
+        #     desc="Recovering ancestry for sequences and structures",
+        # )
         if len(chains) > 0:
             LOGGER.info(f"Parsed {len(chains)} `Chain`s")
             self._chains = chains
