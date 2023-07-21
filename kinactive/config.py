@@ -45,9 +45,14 @@ class DBConfig:
     #: #cpus for adding structures to a chain. Valid if `init_map_numbering_cpus`
     #: is > 1.
     init_add_structure_cpus: int = 1
+    #: Tolerate initialization failures. Should be ``True`` unless testing
+    init_tolerate_failures: bool = True
 
     #: A path to the PK profile (supplied with the package)
     profile: Path = Path(__file__).parent / "resources" / "Pkinase.hmm"
+
+    #: A map between TK and PK profile nodes
+    tk2pk: Path = Path(__file__).parent / "resources" / "tk2pk.json"
 
     #: the domain name to use for extraction.
     pk_map_name: str = PK_NAME
@@ -58,16 +63,16 @@ class DBConfig:
     #: min domain size for structure sequences.
     pk_min_str_domain_size: int = 100
     #: min coverage of the hmm nodes.
-    pk_min_cov_hmm: float = 0.7
+    pk_min_cov_hmm: float = 0.5
     #: min coverage of the sequence.
-    pk_min_cov_seq: float = 0.7
+    pk_min_cov_seq: float = 0.5
     #: min matching residues' fraction between structure and canonical sequences.
-    pk_min_str_seq_match: float = 0.9
+    pk_min_str_seq_match: float = 0.8
 
     #: minimum sequence size to filter raw sequences from UniProt.
     min_seq_size: int = 150
     #: maximum sequence size to filter raw sequences from UniProt.
-    max_seq_size: int = 3000
+    max_seq_size: int = 5000
 
     #: PDB files format.
     pdb_fmt: str = "mmtf.gz"

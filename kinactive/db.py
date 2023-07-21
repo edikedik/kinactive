@@ -1,6 +1,7 @@
 """
 A :class:`DB` class for the PK data collection creation and io.
 """
+import json
 import logging
 import operator as op
 import typing as t
@@ -22,7 +23,8 @@ from lXtractor.core.chain import (
     read_chains,
     ChainIOConfig,
 )
-from lXtractor.ext import PDB, PyHMMer, SIFTS, fetch_uniprot, filter_by_method
+from lXtractor.core.segment import resolve_overlaps
+from lXtractor.ext import PDB, PyHMMer, SIFTS, fetch_uniprot, filter_by_method, Pfam
 from lXtractor.util import get_files, read_fasta, write_fasta
 from more_itertools import ilen, consume, unzip
 from toolz import curry, groupby, itemmap, keyfilter, keymap
@@ -140,8 +142,12 @@ class DB:
 
     def _load_pk_hmm(self, overwrite: bool = False) -> PyHMMer:
         if self._pk_hmm is None or overwrite:
-            self._pk_hmm = PyHMMer(self.cfg.profile, bit_cutoffs="trusted")
+            self._pk_hmm = PyHMMer(self.cfg.profile)
         return self._pk_hmm
+
+    def _load_tk2pk(self) -> dict[int, int]:
+        with self.cfg.tk2pk.open() as f:
+            return keymap(int, json.load(f))
 
     def _fetch_seqs(self, ids: abc.Iterable[str]):
         raw_seqs = fetch_uniprot(
@@ -170,6 +176,114 @@ class DB:
         sifts = self._load_sifts()
         pdb = self._load_pdb()
         return filter_by_method(sifts.pdb_ids, pdb=pdb, method="X-ray")
+
+    def obtain_sifts_seqs(
+        self, uniprot_ids: abc.Sequence[str] | None = None
+    ) -> ChainList[Chain]:
+        sifts = self._load_sifts()
+
+        if uniprot_ids:
+            ids = list(filter(lambda x: x in uniprot_ids, sifts.uniprot_ids))
+            LOGGER.info(
+                f"Filtered to {len(ids)} out of {len(sifts.uniprot_ids)} initial IDs "
+                f"contained in SIFTS using {len(uniprot_ids)} reference IDs."
+            )
+            missing = set(uniprot_ids) - set(ids)
+            if missing:
+                LOGGER.warning(f"{len(missing)} IDs were missing in SIFTS: {missing}")
+        else:
+            ids = sifts.uniprot_ids
+
+        fetch_ids = _get_remaining(ids, self.cfg.seq_dir)
+        LOGGER.info(f"{len(fetch_ids)} remaining sequences to fetch.")
+        self._fetch_seqs(fetch_ids)
+
+        # Read
+        seqs = self._read_seqs(ids)
+        LOGGER.info(f"Got {len(seqs)} seqs from {self.cfg.seq_dir}")
+
+        # Filter sequences by size
+        min_size, max_size = self.cfg.min_seq_size, self.cfg.max_seq_size
+        seqs = seqs.filter(lambda s: min_size <= len(s.seq) <= max_size)
+        LOGGER.info(f"Filtered to {len(seqs)} seqs in [{min_size}, {max_size}]")
+
+        return seqs
+
+    def discover_domains(self, seqs: ChainList[Chain]) -> ChainList[Chain]:
+        def transfer_pk_map(cs: Chain) -> Chain:
+            children = cs.children
+            tk_children = children.filter(lambda x: "TK" in x.name)
+            pk_children = children.filter(lambda x: "PK" in x.name)
+            pk_df = pd.concat((c.seq.as_df() for c in pk_children))
+            for c in tk_children:
+                tk_df = (
+                    c.seq.as_df().merge(pk_df, on="i", how="left").drop_duplicates("i")
+                )
+                idx_missing = tk_df["PK"].isna()
+                tk_df.loc[idx_missing, "PK"] = tk_df.loc[idx_missing, "TK"].map(tk2pk)
+                c.seq["PK"] = tk_df["PK"].tolist()
+            return cs
+
+        @curry
+        def get_field(seq: ChainSequence, contains: str) -> t.Any:
+            key = next(filter(lambda x: contains in x, seq.meta))
+            return seq.meta[key]
+
+        def filter_domains(cs: Chain) -> Chain:
+            children = cs.children.filter(
+                lambda x: len(x.seq) >= self.cfg.pk_min_seq_domain_size
+                and float(get_field(x.seq, "cov_hmm")) >= self.cfg.pk_min_cov_hmm
+                and float(get_field(x.seq, "cov_seq")) >= self.cfg.pk_min_cov_seq
+            )
+            if len(children) == 0:
+                cs.children = ChainList([])
+                return cs
+            non_overlapping = resolve_overlaps(
+                children.sequences, value_fn=get_field(contains="score")
+            )
+            non_overlapping_ids = [s.id for s in non_overlapping]
+            cs.children = children.filter(lambda x: x.seq.id in non_overlapping_ids)
+            return cs
+
+        pfam = Pfam()
+        tk2pk = self._load_tk2pk()
+        tk_prof = pfam.read(accessions=["PF07714"]).iloc[0].PyHMMer
+        pk_prof = pfam.read(accessions=["PF00069"]).iloc[0].PyHMMer
+
+        LOGGER.info("Annotating domains")
+        consume(
+            pk_prof.annotate(
+                seqs,
+                min_size=50,
+                min_score=self.cfg.pk_min_score,
+                new_map_name="PK",
+            )
+        )
+        consume(
+            tk_prof.annotate(
+                seqs,
+                min_size=50,
+                min_score=self.cfg.pk_min_score,
+                new_map_name="TK",
+            )
+        )
+        seqs = seqs.filter(lambda x: len(x.children) > 0)
+        LOGGER.info(f"Discovered {len(seqs)} sequences with domain hits")
+
+        seqs = seqs.filter(lambda x: any("PK" in c.name for c in x.children))
+        LOGGER.info(f"Discovered {len(seqs)} sequences with PK domain hits")
+
+        LOGGER.info("Transferring PK profile maps to TK hits")
+        seqs = (
+            seqs.apply(transfer_pk_map)
+            .apply(filter_domains)
+            .filter(lambda x: len(x.children) > 0)
+        )
+        LOGGER.info(
+            f"Filtered to {len(seqs)} sequences with at least one valid "
+            f"domain with conforming to config criteria."
+        )
+        return seqs
 
     def build(
         self,
@@ -223,46 +337,10 @@ class DB:
         pdb = self._load_pdb()
 
         # Fetch SIFTS UniProt seqs
-        if uniprot_ids:
-            ids = list(filter(lambda x: x in uniprot_ids, sifts.uniprot_ids))
-            LOGGER.info(
-                f"Filtered to {len(ids)} out of {len(sifts.uniprot_ids)} initial IDs "
-                f"contained in SIFTS using {len(uniprot_ids)} reference IDs."
-            )
-            missing = set(uniprot_ids) - set(ids)
-            if missing:
-                LOGGER.warning(f"{len(missing)} IDs were missing in SIFTS: {missing}")
-        else:
-            ids = sifts.uniprot_ids
-
-        fetch_ids = _get_remaining(ids, self.cfg.seq_dir)
-        LOGGER.info(f"{len(fetch_ids)} remaining sequences to fetch.")
-        self._fetch_seqs(fetch_ids)
-
-        # Read
-        seqs = self._read_seqs(ids)
-        LOGGER.info(f"Got {len(seqs)} seqs from {self.cfg.seq_dir}")
-
-        # Filter sequences by size
-        min_size, max_size = self.cfg.min_seq_size, self.cfg.max_seq_size
-        seqs = seqs.filter(lambda s: min_size <= len(s.seq) <= max_size)
-        LOGGER.info(f"Filtered to {len(seqs)} seqs in [{min_size}, {max_size}]")
+        seqs = self.obtain_sifts_seqs(uniprot_ids)
 
         # Annotate PK domains and filter seqs to the annotated ones
-        pk_hmm = self._load_pk_hmm()
-        ann: abc.Iterable[Chain] = pk_hmm.annotate(
-            seqs,
-            new_map_name=self.cfg.pk_map_name,
-            min_score=self.cfg.pk_min_score,
-            min_size=self.cfg.pk_min_seq_domain_size,
-            min_cov_hmm=self.cfg.pk_min_cov_hmm,
-            min_cov_seq=self.cfg.pk_min_cov_seq,
-        )
-        if self.cfg.verbose:
-            ann = tqdm(ann, desc="Annotating sequence domains")
-        annotated_num = sum(1 for _ in ann)
-        seqs = seqs.filter(lambda x: len(x.children) > 0)
-        LOGGER.info(f"Found {annotated_num} PK domains within {len(seqs)} seqs.")
+        seqs = self.discover_domains(seqs)
 
         if n_domains:
             seqs = ChainList(sample(seqs, n_domains))
@@ -321,7 +399,9 @@ class DB:
             for seq, c in zip(seqs, pdb_chains)
             if len(c) > 0
         )
-        init = ChainInitializer(tolerate_failures=True, verbose=self.cfg.verbose)
+        init = ChainInitializer(
+            tolerate_failures=self.cfg.init_tolerate_failures, verbose=self.cfg.verbose
+        )
         chains: ChainList[Chain] = ChainList(
             init.from_mapping(
                 seq2pdb,
@@ -364,7 +444,7 @@ class DB:
 
         for c in chains.collapse_children():
             c.transfer_seq_mapping(self.cfg.pk_map_name)
-            c.seq.children = ChainList([])
+            # c.seq.children = ChainList([])
 
         self._chains = chains
 

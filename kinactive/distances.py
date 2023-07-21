@@ -172,9 +172,9 @@ class DistanceMatrix:
             to this output (inplace).
         """
         try:
-            _key = {'min': min, 'max': max}[key]
+            _key = {"min": min, "max": max}[key]
         except KeyError as e:
-            raise ValueError('Invalid key') from e
+            raise ValueError("Invalid key") from e
 
         structures = ChainList(structures)
         if len(structures) == 1:

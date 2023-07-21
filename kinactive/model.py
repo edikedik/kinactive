@@ -35,6 +35,13 @@ class ModelBase(metaclass=ABCMeta):
 
     @property
     @abstractmethod
+    def features(self) -> abc.Sequence[str]:
+        """
+        :return: A sequence of features available for the model.
+        """
+
+    @property
+    @abstractmethod
     def targets(self) -> abc.Sequence[str]:
         """
         :return: A sequence of target variables.
@@ -70,7 +77,7 @@ class ModelBase(metaclass=ABCMeta):
 
     @abstractmethod
     def generate_fold_idx(
-        self, df: pd.DataFrame, n: int
+            self, df: pd.DataFrame, n: int
     ) -> abc.Iterator[tuple[np.ndarray, np.ndarray]]:
         """
         Generate fold indices from the provided data.
@@ -102,7 +109,7 @@ class ObjectiveFn(t.Protocol):
     """
 
     def __call__(
-        self, trial: optuna.Trial, df: pd.DataFrame, model: ModelBase, n_cv: int
+            self, trial: optuna.Trial, df: pd.DataFrame, model: ModelBase, n_cv: int
     ) -> float:
         ...
 
@@ -113,7 +120,7 @@ class ModelT(t.Protocol):
     """
 
     def fit(
-        self, x: pd.DataFrame | np.ndarray, y: np.ndarray | pd.Series, **kwargs
+            self, x: pd.DataFrame | np.ndarray, y: np.ndarray | pd.Series, **kwargs
     ) -> ModelT:
         """
         Fit the model
@@ -127,11 +134,11 @@ class ModelT(t.Protocol):
 
 
 def xgb_objective(
-    trial: optuna.Trial,
-    df: pd.DataFrame,
-    model: KinactiveModel,
-    n_cv: int = 5,
-    use_early_stopping: bool = False,
+        trial: optuna.Trial,
+        df: pd.DataFrame,
+        model: KinactiveModel,
+        n_cv: int = 5,
+        use_early_stopping: bool = False,
 ) -> float:
     """
     A default objective function for XGB models. It uses the following setup::
@@ -176,17 +183,18 @@ def xgb_objective(
     # callback = optuna.integration.XGBoostPruningCallback(trial, 'validation_logloss')
     params = {**model.params, **params}
     model = model.__class__(
-        model.model, model.targets, model.features, params, use_early_stopping
+        model.model, model.targets, model.features, params, use_early_stopping,
+        cv_col=model.cv_col, weight_col=model.weight_col
     )
     return model.cv(df, n_cv)
 
 
 def lr_objective(
-    trial: optuna.Trial,
-    df: pd.DataFrame,
-    model: KinactiveModel,
-    n_cv: int = 5,
-    use_early_stopping: bool = False,
+        trial: optuna.Trial,
+        df: pd.DataFrame,
+        model: KinactiveModel,
+        n_cv: int = 5,
+        use_early_stopping: bool = False,
 ) -> float:
     """
     A default objective function for the logistic regression model.
@@ -238,7 +246,8 @@ def lr_objective(
 
     params = {**model.params, **params}
     model = model.__class__(
-        model.model, model.targets, model.features, params, use_early_stopping
+        model.model, model.targets, model.features, params, use_early_stopping,
+        cv_col=model.cv_col, weight_col=model.weight_col
     )
     score = model.cv(df, n_cv)
     return score
@@ -258,13 +267,15 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
     """
 
     def __init__(
-        self,
-        model: ModelT,
-        targets: abc.Iterable[str],
-        features: abc.Iterable[str] = (),
-        params: dict[str, t.Any] | None = None,
-        use_early_stopping: bool = False,
-        selector: eBoruta | None = None,
+            self,
+            model: ModelT,
+            targets: abc.Iterable[str],
+            features: abc.Iterable[str] = (),
+            params: dict[str, t.Any] | None = None,
+            use_early_stopping: bool = False,
+            selector: eBoruta | None = None,
+            cv_col: str = 'ObjectID',
+            weight_col: str | None = None,
     ):
         """
         :param model: A model defining ``fit`` and ``predict`` methods.
@@ -273,6 +284,8 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
         :param targets: Target variables' names.
         :param features: Feature variables' names.
         :param params: Initial parameters for the model.
+        :param cv_col: A col used to generate non-overlapping CV folds.
+        :param weight_col: A col pointing to sample weights.
         :param use_early_stopping: If ``True``, and the model is either
             ``XGBClassifier`` or ``XGBRegressor``, the :meth:`train` will
             split the provided dataset into training and evaluation parts
@@ -289,6 +302,10 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
         self._features = features
         self._targets = targets
         self._model = model
+        #: A column pointing to values used to generate CV folds.
+        self.cv_col = cv_col
+        #: A column poining to sample weights.
+        self.weight_col = weight_col
         #: Model's parameters.
         self.params = params or {}
         #: Use early stopping via eval set.
@@ -323,27 +340,29 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
 
     def train(self, df: pd.DataFrame):
         if self.use_early_stopping and isinstance(
-            self.model, (XGBClassifier, XGBRegressor)
+                self.model, (XGBClassifier, XGBRegressor)
         ):
             train_idx, eval_idx = next(self.generate_fold_idx(df, 10))
-            train_df, train_ys = _get_xy(df[train_idx], self.features, self.targets)
-            eval_df, eval_ys = _get_xy(df[eval_idx], self.features, self.targets)
+            train_df, train_ys, train_ws = _get_xy(df[train_idx], self.features, self.targets, self.weight_col)
+            eval_df, eval_ys, eval_ws = _get_xy(df[eval_idx], self.features, self.targets, self.weight_col)
             self._model.fit(
                 train_df,
                 np.squeeze(train_ys.values),
+                sample_weight=train_ws,
                 eval_set=[(eval_df, np.squeeze(eval_ys.values))],
+                sample_weight_eval_set=[eval_ws],
                 verbose=0,
             )
         else:
             assert (
-                "early_stopping_rounds" not in self.params
+                    "early_stopping_rounds" not in self.params
             ), "Must not have early stopping params if `use_early_stopping` is `False`"
-            xs, ys = _get_xy(df, self.features, self.targets)
+            xs, ys, ws = _get_xy(df, self.features, self.targets, self.weight_col)
             assert ys is not None, f"failed finding target variables {self.targets}"
             if isinstance(self.model, (XGBClassifier, XGBRegressor)):
-                self._model.fit(xs.values, np.squeeze(ys.values), verbose=0)
+                self._model.fit(xs.values, np.squeeze(ys.values), sample_weight=ws, verbose=0)
             else:
-                self._model.fit(xs.values, np.squeeze(ys.values))
+                self._model.fit(xs.values, np.squeeze(ys.values), sample_weight=ws)
 
     def predict(self, df: pd.DataFrame) -> np.ndarray:
         df = _apply_selection(df, self.features)
@@ -353,7 +372,7 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
         return _cross_validate(self, df, n, verbose)
 
     def cv_pred(
-        self, df: pd.DataFrame, n: int, verbose: bool = False
+            self, df: pd.DataFrame, n: int, verbose: bool = False
     ) -> tuple[float, pd.DataFrame]:
         """
         Cross-validate the score and predict the data in test folds.
@@ -367,11 +386,11 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
         return _cross_validate_and_predict(self, df, n, verbose)
 
     def select_params(
-        self,
-        df: pd.DataFrame,
-        n_trials: int,
-        direction: str = "maximize",
-        early_stopping_rounds: int = 0,
+            self,
+            df: pd.DataFrame,
+            n_trials: int,
+            direction: str = "maximize",
+            early_stopping_rounds: int = 0,
     ) -> optuna.Study:
         """
         Optimize hyperparameters.
@@ -411,10 +430,10 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
         """
         if self.selector is None:
             self.selector = eBoruta(**kwargs)
-        df_x, df_y = _get_xy(df, self.features, self.targets)
+        df_x, df_y, ws = _get_xy(df, self.features, self.targets, self.weight_col)
         assert df_y is not None
         res = self.selector.fit(
-            df_x, np.squeeze(df_y.values), model=self.model, verbose=0
+            df_x, np.squeeze(df_y.values), ws, model=self.model, verbose=0
         )
         self._features = list(res.features_.accepted)
         return res
@@ -442,10 +461,10 @@ class KinactiveClassifier(KinactiveModel):
     """
 
     def generate_fold_idx(
-        self, df: pd.DataFrame, n: int
+            self, df: pd.DataFrame, n: int
     ) -> abc.Iterator[tuple[np.ndarray, np.ndarray]]:
         return _generate_stratified_fold_idx(
-            df["ObjectID"].values, np.squeeze(df[self.targets].values), n
+            df[self.cv_col].values, np.squeeze(df[self.targets].values), n
         )
 
     def predict_proba(self, df: pd.DataFrame) -> np.ndarray:
@@ -472,10 +491,10 @@ class KinactiveClassifier(KinactiveModel):
         y_pred = self.predict(df)
         y_true = np.squeeze(df[self.targets].values)
         if (
-            len(self.targets) > 1
-            or len(np.bincount(y_true)) > 2
-            or len(np.bincount(y_pred)) > 2
-            and "average" not in kwargs
+                len(self.targets) > 1
+                or len(np.bincount(y_true)) > 2
+                or len(np.bincount(y_pred)) > 2
+                and "average" not in kwargs
         ):
             kwargs["average"] = "micro"
         return f1_score(y_true, y_pred, **kwargs)
@@ -487,9 +506,9 @@ class KinactiveRegressor(KinactiveModel):
     """
 
     def generate_fold_idx(
-        self, df: pd.DataFrame, n: int
+            self, df: pd.DataFrame, n: int
     ) -> abc.Iterator[tuple[np.ndarray, np.ndarray]]:
-        return _generate_fold_idx(df["ObjectID"].map(_get_unique_group).values, n)
+        return _generate_fold_idx(df[self.cv_col].map(_get_unique_group).values, n)
 
     def score(self, df: pd.DataFrame, **kwargs) -> float:
         """
@@ -526,17 +545,19 @@ class DFGClassifier(ModelBase):
     """
 
     def __init__(
-        self,
-        in_model: KinactiveClassifier,
-        out_model: KinactiveClassifier,
-        other_model: KinactiveClassifier,
-        meta_model: KinactiveClassifier,
+            self,
+            in_model: KinactiveClassifier,
+            out_model: KinactiveClassifier,
+            other_model: KinactiveClassifier,
+            meta_model: KinactiveClassifier,
+            cv_col: str = 'ObjectID'
     ):
         self.models: DFGModels = DFGModels(in_model, out_model, other_model, meta_model)
+        self.cv_col = cv_col
 
     @property
     def targets(
-        self,
+            self,
     ) -> list[str]:
         return self.models.meta.targets
 
@@ -629,10 +650,10 @@ class DFGClassifier(ModelBase):
         return f1_score(y_true, y_pred, **kwargs)
 
     def generate_fold_idx(
-        self, df: pd.DataFrame, n: int
+            self, df: pd.DataFrame, n: int
     ) -> abc.Iterator[tuple[np.ndarray, np.ndarray]]:
         return _generate_stratified_fold_idx(
-            df["ObjectID"].values, np.squeeze(df[self.targets].values), n
+            df[self.cv_col].values, np.squeeze(df[self.targets].values), n
         )
 
     def cv(self, df: pd.DataFrame, n: int, verbose: bool = True):
@@ -691,7 +712,7 @@ def _apply_selection(df: pd.DataFrame, features: list[str]):
 
 
 def _generate_fold_chunks(
-    obj_ids: np.ndarray, n_folds: int
+        obj_ids: np.ndarray, n_folds: int
 ) -> abc.Generator[tuple[np.ndarray, np.ndarray], None, None]:
     ids = np.unique(obj_ids)
     np.random.shuffle(ids)
@@ -703,7 +724,7 @@ def _generate_fold_chunks(
 
 
 def _generate_fold_idx(
-    obj_ids: np.ndarray, n_folds: int
+        obj_ids: np.ndarray, n_folds: int
 ) -> abc.Generator[tuple[np.ndarray, np.ndarray], None, None]:
     for train_chunk, test_chunk in _generate_fold_chunks(obj_ids, n_folds):
         idx_test = np.isin(obj_ids, test_chunk)
@@ -712,9 +733,9 @@ def _generate_fold_idx(
 
 
 def _generate_stratified_fold_idx(
-    obj_ids: abc.Sequence[abc.Hashable],
-    target: abc.Sequence[abc.Hashable],
-    n_folds: int,
+        obj_ids: abc.Sequence[abc.Hashable],
+        target: abc.Sequence[abc.Hashable],
+        n_folds: int,
 ):
     df = pd.DataFrame({"ObjectID": obj_ids, "Target": target})
     groups = [
@@ -746,18 +767,19 @@ def _get_unique_group(obj_id: str) -> str:
 
 
 def _get_xy(
-    df, features: list[str], targets: list[str] | None
-) -> tuple[pd.DataFrame, pd.DataFrame | None]:
+        df, features: list[str], targets: list[str] | None, weight: str | None,
+) -> tuple[pd.DataFrame, pd.DataFrame | None, np.ndarray | None]:
     ys = _apply_selection(df, targets) if targets else None
+    ws = df[weight].values if weight else None
     df = _apply_selection(df, features)
-    return df, ys
+    return df, ys, ws
 
 
 def _cross_validate(
-    model: ModelBase,
-    df: pd.DataFrame,
-    n: int,
-    verbose: bool = False,
+        model: ModelBase,
+        df: pd.DataFrame,
+        n: int,
+        verbose: bool = False,
 ) -> float:
     idx_gen = model.generate_fold_idx(df, n)
     if verbose:
@@ -777,10 +799,10 @@ def _cross_validate(
 
 
 def _cross_validate_and_predict(
-    model: ModelBase,
-    df: pd.DataFrame,
-    n: int,
-    verbose: bool = False,
+        model: ModelBase,
+        df: pd.DataFrame,
+        n: int,
+        verbose: bool = False,
 ) -> tuple[float, pd.DataFrame]:
     df = df.copy()
     idx_gen = model.generate_fold_idx(df, n)
@@ -812,17 +834,19 @@ def _cross_validate_and_predict(
 
 
 def make(
-    df: pd.DataFrame,
-    targets: list[str],
-    features: list[str],
-    starting_params: dict[str, t.Any],
-    use_early_stopping: bool = False,
-    early_stopping_rounds_param_sel: int = 0,
-    classifier: bool = True,
-    n_trials_sel_1: int = 50,
-    n_trials_sel_2: int = 50,
-    n_final_cv: int = 10,
-    boruta_kwargs: dict[str, t.Any] | None = None,
+        df: pd.DataFrame,
+        targets: list[str],
+        features: list[str],
+        starting_params: dict[str, t.Any],
+        cv_col: str = 'ObjectID',
+        weight_col: str | None = None,
+        use_early_stopping: bool = False,
+        early_stopping_rounds_param_sel: int = 0,
+        classifier: bool = True,
+        n_trials_sel_1: int = 50,
+        n_trials_sel_2: int = 50,
+        n_final_cv: int = 10,
+        boruta_kwargs: dict[str, t.Any] | None = None,
 ) -> tuple[KinactiveClassifier | KinactiveRegressor, float, pd.DataFrame]:
     """
     A pipeline to make a new ``KinActive`` model. It comprises:
@@ -838,6 +862,10 @@ def make(
     :param targets: The names of the target columns.
     :param features: The names of the feature columns.
     :param starting_params: The starting model's parameters.
+    :param cv_col: A column used to generate CV folds. The folds will be built
+        such that the values this column points to will never overlap between
+        folds.
+    :param weight_col: Optionally, a column name pointing to the sample weights.
     :param use_early_stopping: Use early stopping to cap the number of trees.
         The ``early_stopping_rounds`` param may be provided via
         ``starting_params``.
@@ -858,22 +886,18 @@ def make(
     taken_names = ["ObjectID", *targets]
     features = features or [c for c in df.columns if c not in taken_names]
 
+    args = dict(
+        targets=targets,
+        features=features,
+        cv_col=cv_col,
+        weight_col=weight_col,
+        params=starting_params,
+        use_early_stopping=use_early_stopping
+    )
     if classifier:
-        model = KinactiveClassifier(
-            XGBClassifier(),
-            targets,
-            features,
-            params=starting_params,
-            use_early_stopping=use_early_stopping,
-        )
+        model = KinactiveClassifier(XGBClassifier(), **args)
     else:
-        model = KinactiveRegressor(
-            XGBRegressor(),
-            targets,
-            features,
-            params=starting_params,
-            use_early_stopping=use_early_stopping,
-        )
+        model = KinactiveRegressor(XGBRegressor(), **args)
 
     if n_trials_sel_1 > 0:
         LOGGER.info(
