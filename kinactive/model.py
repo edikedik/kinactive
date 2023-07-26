@@ -544,6 +544,8 @@ class DFGClassifier(ModelBase):
     the :class:`KinActiveClassifier`.
     """
 
+
+
     def __init__(
             self,
             in_model: KinactiveClassifier,
@@ -554,6 +556,14 @@ class DFGClassifier(ModelBase):
     ):
         self.models: DFGModels = DFGModels(in_model, out_model, other_model, meta_model)
         self.cv_col = cv_col
+
+    @property
+    def features(self) -> abc.Sequence[str]:
+        """
+        This returns :meth:`dfg_features` and exists for compatability with the
+        :class:`ModelBase`.
+        """
+        return self.dfg_features
 
     @property
     def targets(
