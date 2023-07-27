@@ -210,18 +210,16 @@ class DB:
         return seqs
 
     def discover_domains(self, seqs: ChainList[Chain]) -> ChainList[Chain]:
+
         def transfer_pk_map(cs: Chain) -> Chain:
             children = cs.children
             tk_children = children.filter(lambda x: "TK" in x.name)
-            pk_children = children.filter(lambda x: "PK" in x.name)
-            pk_df = pd.concat((c.seq.as_df() for c in pk_children))
+
             for c in tk_children:
-                tk_df = (
-                    c.seq.as_df().merge(pk_df, on="i", how="left").drop_duplicates("i")
-                )
-                idx_missing = tk_df["PK"].isna()
-                tk_df.loc[idx_missing, "PK"] = tk_df.loc[idx_missing, "TK"].map(tk2pk)
+                tk_df = c.seq.as_df()
+                tk_df["PK"] = tk_df["TK"].map(tk2pk)
                 c.seq["PK"] = tk_df["PK"].tolist()
+
             return cs
 
         @curry
@@ -270,8 +268,10 @@ class DB:
         seqs = seqs.filter(lambda x: len(x.children) > 0)
         LOGGER.info(f"Discovered {len(seqs)} sequences with domain hits")
 
-        seqs = seqs.filter(lambda x: any("PK" in c.name for c in x.children))
-        LOGGER.info(f"Discovered {len(seqs)} sequences with PK domain hits")
+        tk_hits = seqs.collapse_children().filter(lambda x: "TK" in x.name)
+        pk_hits = seqs.collapse_children().filter(lambda x: "PK" in x.name)
+        LOGGER.info(f"Initial TK hits: {len(tk_hits)}")
+        LOGGER.info(f"Initial PK hits: {len(pk_hits)}")
 
         LOGGER.info("Transferring PK profile maps to TK hits")
         seqs = (
@@ -283,6 +283,12 @@ class DB:
             f"Filtered to {len(seqs)} sequences with at least one valid "
             f"domain with conforming to config criteria."
         )
+
+        tk_hits = seqs.collapse_children().filter(lambda x: "TK" in x.name)
+        pk_hits = seqs.collapse_children().filter(lambda x: "PK" in x.name)
+        LOGGER.info(f"Final TK hits: {len(tk_hits)}")
+        LOGGER.info(f"Final PK hits: {len(pk_hits)}")
+
         return seqs
 
     def build(
@@ -480,7 +486,7 @@ class DB:
         io = ChainIO(
             num_proc=self.cfg.io_cpus, verbose=self.cfg.verbose, tolerate_failures=False
         )
-        consume(io.write(chains, base=dest))
+        consume(io.write(chains, base=dest, str_fmt=self.cfg.pdb_fmt))
         if summary:
             summary = self.chains.summary(children=True, structures=True)
             for df, name in zip(_split_summary(summary), DumpNames.summary_file_names):
