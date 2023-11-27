@@ -11,7 +11,7 @@ from itertools import chain
 from pathlib import Path
 from random import sample
 
-import lXtractor.core.config as lx_cfg
+from lXtractor.core.config import DefaultConfig
 import pandas as pd
 from lXtractor.core.chain import (
     Chain,
@@ -35,6 +35,9 @@ from kinactive.config import DBConfig, DumpNames
 T = t.TypeVar("T")
 CT_: t.TypeAlias = Chain | ChainSequence | ChainStructure
 LOGGER = logging.getLogger(__name__)
+
+# Change primary polymer type to the expected protein
+DefaultConfig["structure"]["primary_pol_type"] = "p"
 
 
 # TODO: some object IDs are duplicated:
@@ -210,7 +213,6 @@ class DB:
         return seqs
 
     def discover_domains(self, seqs: ChainList[Chain]) -> ChainList[Chain]:
-
         def transfer_pk_map(cs: Chain) -> Chain:
             children = cs.children
             tk_children = children.filter(lambda x: "TK" in x.name)
@@ -315,9 +317,9 @@ class DB:
             s.seq.match("seq1", "seq1_canonical", as_fraction=True, save=True)
             return s
 
-        def filter_domain_str_by_canon_seq_match(c: Chain) -> Chain:
+        def accept_domain_structure(c: Chain) -> Chain:
             c.transfer_seq_mapping(
-                lx_cfg.SeqNames.seq1, map_name_in_other="seq1_canonical"
+                DefaultConfig["mapnames"]["seq1"], map_name_in_other="seq1_canonical"
             )
 
             match_name = "Match_seq1_seq1_canonical"
@@ -327,6 +329,13 @@ class DB:
                     and s.seq.meta[match_name] >= self.cfg.pk_min_str_seq_match
                 )
             )
+            return c
+
+        def filter_structures(c: Chain) -> Chain:
+            parent_ids = [x.parent.id for x in c.children.structures]
+            print(parent_ids, c.structures)
+            c.structures = c.structures.filter(lambda x: x.id in parent_ids)
+            print(c.structures)
             return c
 
         # 0. Init directories
@@ -353,7 +362,8 @@ class DB:
             LOGGER.info(f"Sampled to {len(seqs)} random initial domains.")
 
         # Get UniProt IDs and corresponding PDB Chains
-        uni_ids = [x.id.split("|")[1] for x in seqs]
+        uni2seq = {s.id.split("|")[1]: s for s in seqs}
+        uni_ids = list(uni2seq)
         pdb_chains = [x for x in map(sifts.map_id, uni_ids) if x is not None]
 
         # Filter PDB IDs to provided list
@@ -369,7 +379,7 @@ class DB:
                 f"({len(pdb_chain_ids)} reference IDs were provided for filtering)."
             )
             filtered_pairs = list(
-                filter(lambda x: len(x[1]) > 1, zip(uni_ids, pdb_chains, strict=True))
+                filter(lambda x: len(x[1]) > 0, zip(uni_ids, pdb_chains, strict=True))
             )
             LOGGER.info(
                 f"Filtered to {len(filtered_pairs)} sequences mapped to at least one "
@@ -401,9 +411,11 @@ class DB:
 
         # Init Chain objects
         seq2pdb = dict(
-            _stage_chain_init(seq, c, self.cfg.pdb_dir, self.cfg.pdb_fmt)
-            for seq, c in zip(seqs, pdb_chains)
-            if len(c) > 0
+            _stage_chain_init(
+                uni2seq[seq_id], str_ids, self.cfg.pdb_dir, self.cfg.pdb_fmt
+            )
+            for seq_id, str_ids in zip(uni_ids, pdb_chains)
+            if len(str_ids) > 0
         )
         init = ChainInitializer(
             tolerate_failures=self.cfg.init_tolerate_failures, verbose=self.cfg.verbose
@@ -420,11 +432,12 @@ class DB:
         ).filter(lambda c: len(c.structures) > 0)
         LOGGER.info(f"Initialized {len(chains)} `Chain` objects.")
 
-        num_init = ilen(chains.collapse_children().iter_structures())
+        num_init = len(chains.collapse_children().structures)
         chains = chains.apply(
-            lambda c: c.apply_children(filter_domain_str_by_canon_seq_match)
+            lambda c: c.apply_children(accept_domain_structure)
         )
-        num_curr = ilen(chains.collapse_children().iter_structures())
+        chains = chains.apply(filter_structures)
+        num_curr = len(chains.collapse_children().structures)
         LOGGER.info(
             f"Filtered to {num_curr} out of {num_init} domain structures "
             f"having >={self.cfg.pk_min_str_domain_size} extracted domain size "
@@ -438,7 +451,7 @@ class DB:
         num_curr = len(chains.collapse_children())
         LOGGER.info(
             f"Filtered to {num_curr} out of {num_init} domains with "
-            "at least one valid structures."
+            "at least one valid structure."
         )
 
         num_init = len(chains)

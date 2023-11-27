@@ -125,7 +125,8 @@ class _DumpNames:
     cls_keyword: str = "classifier"
     reg_keyword: str = "regressor"
 
-    model_filename: str = "model.bin"
+    sklearn_model_filename: str = "model.bin"
+    xgb_model_filename: str = "model.json"
     features_filename: str = "features.txt"
     targets_filename: str = "targets.txt"
     params_filename: str = "params.json"
