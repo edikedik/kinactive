@@ -197,7 +197,7 @@ class DefaultFeatures:
         self,
         chains: abc.Sequence[ChainSequence],
         map_name: str = PK_NAME,
-        num_proc: int | None = None,
+        num_proc: int = 1,
         verbose: bool = True,
     ) -> pd.DataFrame:
         """
@@ -217,7 +217,7 @@ class DefaultFeatures:
         self,
         chains: abc.Sequence[ChainStructure],
         map_name: str = PK_NAME,
-        num_proc: int | None = None,
+        num_proc: int = 1,
         verbose: bool = True,
     ) -> pd.DataFrame:
         """
@@ -237,7 +237,7 @@ class DefaultFeatures:
         self,
         chains: abc.Sequence[ChainStructure],
         map_name: str = PK_NAME,
-        num_proc: int | None = None,
+        num_proc: int = 1,
         verbose: bool = True,
     ) -> pd.DataFrame:
         """
@@ -257,7 +257,7 @@ class DefaultFeatures:
         self,
         chains: abc.Sequence[Chain],
         map_name: str = PK_NAME,
-        num_proc: int | None = None,
+        num_proc: int = 1,
         verbose: bool = True,
         base: Path | None = None,
         overwrite: bool = False,
@@ -287,25 +287,25 @@ class DefaultFeatures:
         staged = [
             (
                 self.calculate_seq_vs,
-                chains.sequences,
+                chains.sequences.drop_duplicates(),
                 "canonical seqs",
                 DumpNames.canonical_seq_vs,
             ),
             (
                 self.calculate_seq_vs,
-                chains.structure_sequences,
+                chains.structure_sequences.drop_duplicates(),
                 "structure seqs",
                 DumpNames.structure_seq_vs,
             ),
             (
                 self.calculate_lig_vs,
-                chains.structures,
+                chains.structures.drop_duplicates(),
                 "ligand variables",
                 DumpNames.ligand_vs,
             ),
             (
                 self.calculate_str_vs,
-                chains.structures,
+                chains.structures.drop_duplicates(),
                 "structure variables",
                 DumpNames.structure_vs,
             ),
@@ -346,7 +346,7 @@ class DefaultFeatures:
 def calculate(
     chains: abc.Sequence[CT],
     vs: abc.Sequence[VT],
-    num_proc: int | None = None,
+    num_proc: int = 1,
     verbose: bool = True,
     **kwargs,
 ) -> pd.DataFrame:
@@ -361,10 +361,10 @@ def calculate(
         (see ``lXtractor`` docs).
     :return:
     """
-    manager = Manager(verbose=verbose)
-    calculator = GenericCalculator(num_proc=num_proc)
+    manager = Manager()
+    calculator = GenericCalculator(num_proc=num_proc, verbose=verbose)
     results = manager.calculate(chains, vs, calculator, **kwargs)
-    df = manager.aggregate_from_it(results, replace_errors=True)
+    df = manager.aggregate_from_it(results, replace_errors=True, num_vs=len(vs))
     # assert isinstance(df, pd.DataFrame), 'Failed to convert results into a table'
     return df
 
