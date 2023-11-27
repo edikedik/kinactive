@@ -9,8 +9,8 @@ from collections import abc
 from pathlib import Path
 
 import joblib
-from lXtractor.core.exceptions import MissingData
 from lXtractor.util.io import get_files
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from xgboost import XGBClassifier, XGBRegressor
 
@@ -126,10 +126,10 @@ def save(
     save_txt_lines(model.features, path / DumpNames.features_filename)
     save_json(model.params, path / DumpNames.params_filename)
 
-    if isinstance(model.model, LogisticRegression):
-        save_sklearn(model.model, path / DumpNames.model_filename)
+    if isinstance(model.model, (LogisticRegression, RandomForestClassifier)):
+        save_sklearn(model.model, path / DumpNames.sklearn_model_filename)
     elif isinstance(model.model, (XGBClassifier, XGBRegressor)):
-        save_xgb(model.model, path / DumpNames.model_filename)
+        save_xgb(model.model, path / DumpNames.xgb_model_filename)
     else:
         raise TypeError("...")
 
@@ -218,7 +218,12 @@ def load(path: Path) -> KinactiveClassifier | KinactiveRegressor | DFGClassifier
         return load_dfg(path)
     if "classifier" in name:
         cls = KinactiveClassifier
-        cls_type = LogisticRegression if "meta" in name else XGBClassifier
+        if "meta" in name:
+            cls_type = LogisticRegression
+        elif "rf" in name:
+            cls_type = RandomForestClassifier
+        else:
+            cls_type = XGBClassifier
     elif "regressor" in name:
         cls = KinactiveRegressor
         cls_type = XGBRegressor
@@ -227,23 +232,23 @@ def load(path: Path) -> KinactiveClassifier | KinactiveRegressor | DFGClassifier
             'Directory name must contain either "regressor" or "classifier"'
         )
     files = get_files(path)
-    expected_names = [
-        DumpNames.model_filename,
-        DumpNames.features_filename,
-        DumpNames.params_filename,
-    ]
-    for name in expected_names:
-        if name not in files:
-            raise MissingData(f'Missing required file "{name}" in {path}')
+    # expected_names = [
+    #     DumpNames.model_filename,
+    #     DumpNames.features_filename,
+    #     DumpNames.params_filename,
+    # ]
+    # for name in expected_names:
+    #     if name not in files:
+    #         raise MissingData(f'Missing required file "{name}" in {path}')
 
     targets = load_txt_lines(files[DumpNames.targets_filename])
     features = load_txt_lines(files[DumpNames.features_filename])
     params = load_json(files[DumpNames.params_filename])
 
-    if cls_type is LogisticRegression:
-        model = load_sklearn(files[DumpNames.model_filename])
+    if cls_type in (LogisticRegression, RandomForestClassifier):
+        model = load_sklearn(files[DumpNames.sklearn_model_filename])
     else:
-        model = load_xgb(files[DumpNames.model_filename], cls_type())
+        model = load_xgb(files[DumpNames.xgb_model_filename], cls_type())
 
     return cls(model, targets, features, params)
 
