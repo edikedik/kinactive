@@ -49,24 +49,13 @@ def kinactive():
     pass
 
 
-@kinactive.command("setup")
-@click.option("-s", "--sifts", **_DefaultFlagKwsTrue)
-@click.option("-p", "--pfam", **_DefaultFlagKwsTrue)
-def setup(sifts, pfam):
-    """
-    Configure the tool for a first-time usage. Required for the "db" and
-    "predict" commands.
-    """
-    pass
-
-
 @kinactive.command("fetch", no_args_is_help=True)
 @click.option("-d", "--db", **_DefaultFlagKwsFalse)
 @click.option("-p", "--seq_pred", **_DefaultFlagKwsFalse)
 @click.option("-P", "--struc_pred", **_DefaultFlagKwsFalse)
 @click.option("-s", "--seq_features", **_DefaultFlagKwsFalse)
 @click.option("-S", "--struc_features", **_DefaultFlagKwsFalse)
-def fetch(db, seq_pred, struc_pred):
+def fetch(db, seq_pred, struc_pred, seq_features, struc_features):
     """
     Fetch related data.
     """

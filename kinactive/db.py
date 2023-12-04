@@ -30,6 +30,7 @@ from more_itertools import ilen, consume, unzip
 from toolz import curry, groupby, itemmap, keyfilter, keymap
 from tqdm.auto import tqdm
 
+from kinactive.base import TK_PROFILE_PATH, PK_PROFILE_PATH
 from kinactive.config import DBConfig, DumpNames
 
 T = t.TypeVar("T")
@@ -246,10 +247,9 @@ class DB:
             cs.children = children.filter(lambda x: x.seq.id in non_overlapping_ids)
             return cs
 
-        pfam = Pfam()
         tk2pk = self._load_tk2pk()
-        tk_prof = pfam.read(accessions=["PF07714"]).iloc[0].PyHMMer
-        pk_prof = pfam.read(accessions=["PF00069"]).iloc[0].PyHMMer
+        tk_prof = PyHMMer(TK_PROFILE_PATH)
+        pk_prof = PyHMMer(PK_PROFILE_PATH)
 
         LOGGER.info("Annotating domains")
         consume(
@@ -432,9 +432,7 @@ class DB:
         LOGGER.info(f"Initialized {len(chains)} `Chain` objects.")
 
         num_init = len(chains.collapse_children().structures)
-        chains = chains.apply(
-            lambda c: c.apply_children(accept_domain_structure)
-        )
+        chains = chains.apply(lambda c: c.apply_children(accept_domain_structure))
         chains = chains.apply(filter_structures)
         num_curr = len(chains.collapse_children().structures)
         LOGGER.info(

@@ -49,7 +49,7 @@ class DBConfig:
     init_tolerate_failures: bool = True
 
     #: A path to the PK profile (supplied with the package)
-    profile: Path = Path(__file__).parent / "resources" / "Pkinase.hmm"
+    profile: Path = Path(__file__).parent / "resources" / "PF00069.hmm"
 
     #: A map between TK and PK profile nodes
     tk2pk: Path = Path(__file__).parent / "resources" / "tk2pk.json"

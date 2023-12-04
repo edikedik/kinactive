@@ -19,6 +19,9 @@ SEQ_CLASSES = {0: "STK", 1: "TK"}
 DFG_STR_CLASSES = {0: "DFG-in", 1: "DFG-other", 2: "DFG-out"}
 DFG_SEQ_CLASSES = {0: "DFG-in", 1: "DFG-out"}
 
+TK_PROFILE_PATH = RESOURCES_PATH / "PF07714.hmm"
+PK_PROFILE_PATH = RESOURCES_PATH / "PF00069.hmm"
+
 
 if __name__ == "__main__":
     raise RuntimeError
