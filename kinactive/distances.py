@@ -14,7 +14,7 @@ from random import choice
 import biotite.structure as bst
 import numpy as np
 import pandas as pd
-from lXtractor.core.chain import ChainList, ChainStructure
+from lXtractor.chain import ChainList, ChainStructure
 from lXtractor.core.exceptions import MissingData
 from lXtractor.protocols.superpose import superpose_pairwise, SuperposeOutput
 

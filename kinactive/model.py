@@ -7,24 +7,29 @@ import logging
 import operator as op
 import re
 import typing as t
+import warnings
 from abc import ABCMeta, abstractmethod
 from collections import abc
 from itertools import chain
 from statistics import mean
 
-import numpy as np
-import optuna
-import pandas as pd
-from eBoruta import eBoruta, Dataset, TrialData, Features
-from more_itertools import unique_everseen
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import f1_score, r2_score
-from toolz import curry
-from tqdm.auto import tqdm
-from xgboost import XGBClassifier, XGBRegressor
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore")
 
-from kinactive.config import ColNames, DFG_MAP_REV
+    import numpy as np
+    import optuna
+    import pandas as pd
+
+    from eBoruta import eBoruta, Dataset, TrialData, Features
+    from more_itertools import unique_everseen
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import f1_score, r2_score
+    from toolz import curry
+    from tqdm.auto import tqdm
+    from xgboost import XGBClassifier, XGBRegressor
+
+    from kinactive.config import ColNames, DFG_MAP_REV
 
 PDB_PATTERN = re.compile(r"\((\w{4}):\w+\|")
 LOGGER = logging.getLogger(__name__)

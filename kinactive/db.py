@@ -13,7 +13,7 @@ from random import sample
 
 from lXtractor.core.config import DefaultConfig
 import pandas as pd
-from lXtractor.core.chain import (
+from lXtractor.chain import (
     Chain,
     ChainIO,
     ChainInitializer,
@@ -49,6 +49,7 @@ DefaultConfig["structure"]["primary_pol_type"] = "p"
 #  'ChainStructure(PK_1|38-323<-(3U87:A|1-334))',
 #  'ChainStructure(PK_1|38-323<-(3U87:B|1-334))']
 # TODO: include UniProt metadata
+# TODO: an option to patch PDB sequences
 
 
 def _get_remaining(names: abc.Iterable[str], dir_: Path) -> set[str]:
@@ -212,8 +213,8 @@ class DB:
 
         return seqs
 
-    def discover_domains(self, seqs: ChainList[Chain]) -> ChainList[Chain]:
-        def transfer_pk_map(cs: Chain) -> Chain:
+    def discover_domains(self, seqs: ChainList[CT_]) -> ChainList[CT_]:
+        def transfer_pk_map(cs: CT_) -> CT_:
             children = cs.children
             tk_children = children.filter(lambda x: "TK" in x.name)
 
@@ -229,7 +230,7 @@ class DB:
             key = next(filter(lambda x: contains in x, seq.meta))
             return seq.meta[key]
 
-        def filter_domains(cs: Chain) -> Chain:
+        def filter_domains(cs: CT_) -> CT_:
             children = cs.children.filter(
                 lambda x: len(x.seq) >= self.cfg.pk_min_seq_domain_size
                 and float(get_field(x.seq, "cov_hmm")) >= self.cfg.pk_min_cov_hmm
@@ -333,9 +334,7 @@ class DB:
 
         def filter_structures(c: Chain) -> Chain:
             parent_ids = [x.parent.id for x in c.children.structures]
-            print(parent_ids, c.structures)
             c.structures = c.structures.filter(lambda x: x.id in parent_ids)
-            print(c.structures)
             return c
 
         # 0. Init directories

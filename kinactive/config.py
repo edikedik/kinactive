@@ -125,11 +125,11 @@ class _DumpNames:
     cls_keyword: str = "classifier"
     reg_keyword: str = "regressor"
 
-    sklearn_model_filename: str = "model.bin"
-    xgb_model_filename: str = "model.json"
-    features_filename: str = "features.txt"
-    targets_filename: str = "targets.txt"
-    params_filename: str = "params.json"
+    bin_model: str = "model.bin"
+    json_model: str = "model.json"
+    features: str = "features.txt"
+    targets: str = "targets.txt"
+    params: str = "params.json"
 
     in_model_dirname: str = "in"
     out_model_dirname: str = "out"
@@ -182,6 +182,11 @@ class _ColNames:
     dfg_in_meta_prob: str = "in_meta_proba"
     dfg_out_meta_prob: str = "out_meta_prob"
     dfg_other_meta_prob: str = "other_meta_prob"
+
+    ahao_col = "DFGout_holo"
+    aaio_col = "DFGout_apo"
+    ahao_prob_col = "DFGout_holo_prob"
+    aaio_prob_col = "DFGout_apo_prob"
 
     rmsd_ca: str = "RMSD_CA"
     rmsd_df: str = "RMSD_DF"

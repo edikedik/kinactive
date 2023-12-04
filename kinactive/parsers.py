@@ -4,7 +4,7 @@ from io import StringIO
 from itertools import chain
 from pathlib import Path
 
-import lXtractor.core.chain as lxc
+import lXtractor.chain as lxc
 from lXtractor.core import ProteinStructure, GenericStructure
 from lXtractor.ext import AlphaFold, PDB, fetch_uniprot
 from lXtractor.util import read_fasta

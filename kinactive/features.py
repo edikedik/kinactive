@@ -2,6 +2,7 @@
 Variables' definitions and calculation.
 """
 import logging
+import re
 import typing as t
 from collections import abc
 from dataclasses import dataclass
@@ -9,7 +10,7 @@ from itertools import chain, combinations
 from pathlib import Path
 
 import pandas as pd
-from lXtractor.core.chain import ChainSequence, ChainStructure, Chain, ChainList
+from lXtractor.chain import ChainSequence, ChainStructure, Chain, ChainList
 from lXtractor.util import get_files
 from lXtractor.variables import (
     GenericCalculator,
@@ -30,10 +31,14 @@ from lXtractor.variables import (
 from lXtractor.variables.base import StructureVariable, SequenceVariable
 from more_itertools import windowed
 
+from kinactive.base import SEQ_MODEL_PATHS, STR_MODEL_PATHS
 from kinactive.config import PK_NAME, DumpNames
+from kinactive.io import load_txt_lines
 
 CT: t.TypeAlias = ChainSequence | ChainStructure
 VT: t.TypeAlias = SequenceVariable | StructureVariable
+
+POS_PATTERN = re.compile(r"p\d?=(\d+)")
 
 LOGGER = logging.getLogger(__name__)
 Results = t.NamedTuple(
@@ -367,6 +372,44 @@ def calculate(
     df = manager.aggregate_from_it(results, replace_errors=True, num_vs=len(vs))
     # assert isinstance(df, pd.DataFrame), 'Failed to convert results into a table'
     return df
+
+
+def init_vs(var_names: abc.Iterable[str]) -> list[SequenceVariable | StructureVariable]:
+    """
+    Initialize variables from their string representations.
+
+    :param var_names: Variable names.
+    :return: A sorted list of unique initialized variables.
+    """
+    return list(
+        map(eval, sorted(set(var_names), key=lambda x: int(POS_PATTERN.findall(x)[0])))
+    )
+
+
+def load_seq_model_features() -> list[SequenceVariable]:
+    """
+    Load sequence-based models' variables.
+
+    :return: A sorted list of unique initialized variables.
+    """
+    vs = (load_txt_lines(p / "features.txt") for p in SEQ_MODEL_PATHS.values())
+    return init_vs(chain.from_iterable(vs))
+
+
+def load_str_model_features():
+    """
+    Load structure-based models' variables.
+
+    :return: A sorted list of unique initialized variables.
+    """
+    paths = chain(
+        [STR_MODEL_PATHS["kinactive"] / "features.txt"],
+        (
+            STR_MODEL_PATHS["DFG"] / f"{x}_classifier" / "features.txt"
+            for x in ["in", "out", "other"]
+        ),
+    )
+    return init_vs(chain.from_iterable(map(load_txt_lines, paths)))
 
 
 if __name__ == "__main__":
