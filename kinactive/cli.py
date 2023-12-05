@@ -55,7 +55,8 @@ def kinactive():
 @click.option("-P", "--struc_pred", **_DefaultFlagKwsFalse)
 @click.option("-s", "--seq_features", **_DefaultFlagKwsFalse)
 @click.option("-S", "--struc_features", **_DefaultFlagKwsFalse)
-def fetch(db, seq_pred, struc_pred, seq_features, struc_features):
+@click.option('-a', '--all_data', **_DefaultFlagKwsFalse)
+def fetch(db, seq_pred, struc_pred, seq_features, struc_features, all_data):
     """
     Fetch related data.
     """
@@ -95,6 +96,14 @@ def db(config, overwrite):
     help="Path to an output directory. If provided, the data sequence or structure "
     "data collection will be saved to this dir, along with calculated variables "
     "and predicted labels.",
+)
+@click.option(
+    "-d",
+    "--domains",
+    is_flag=True,
+    help="The inputs are paths to already extracted chain sequence or chain structure "
+    "domains. Thus, they already exist and won't be saved separately if `out_dir` "
+    "is provided.",
 )
 @click.option(
     "--pdb_fmt",
@@ -154,6 +163,7 @@ def predict(
     inputs,
     inp_type,
     out_dir,
+    domains,
     pdb_fmt,
     af2_fmt,
     str_out_fmt,
@@ -190,13 +200,18 @@ def predict(
             else:
                 LOGGER.add("file_{time}.log")
 
-    # tmp = list(prepare_inputs(inputs, inp_type, pdb_fmt, af2_fmt, altloc))
     chains = lxc.ChainList(prepare_inputs(inputs, inp_type, pdb_fmt, af2_fmt, altloc))
     LOGGER.info(f"Initialized {len(chains)} chains")
 
-    _db = DB()
-    chains = _db.discover_domains(chains)
-    domains = chains.collapse_children()
+    if domains:
+        extracted = True
+        domains = chains
+    else:
+        extracted = False
+        _db = DB()
+        chains = _db.discover_domains(chains)
+        domains = chains.collapse_children()
+
     LOGGER.info(
         f"Discovered {len(domains)} domains; "
         f"{len(chains)} domain-containing chains remained."
@@ -220,14 +235,17 @@ def predict(
         dfp = predict_on_seqs(vs)
 
     if out_dir:
-        chains_dir = out_dir / "chains"
-        chains_dir.mkdir(exist_ok=True, parents=True)
-        kw = dict(write_children=True)
-        if inp_type in ["S", "a"]:
-            kw["fmt"] = str_out_fmt
-        io = lxc.ChainIO(verbose=verbose, num_proc=num_proc)
-        num_saved = ilen(io.write(chains, out_dir / "chains", **kw))
-        LOGGER.info(f"Wrote {num_saved} chains to {chains_dir}")
+        if extracted:
+            LOGGER.info("The domains were already extracted; chains won't be saved.")
+        else:
+            chains_dir = out_dir / "chains"
+            chains_dir.mkdir(exist_ok=True, parents=True)
+            kw = dict(write_children=True)
+            if inp_type in ["S", "a"]:
+                kw["fmt"] = str_out_fmt
+            io = lxc.ChainIO(verbose=verbose, num_proc=num_proc)
+            num_saved = ilen(io.write(chains, out_dir / "chains", **kw))
+            LOGGER.info(f"Wrote {num_saved} chains to {chains_dir}")
 
         vs.to_csv(out_dir / "variables.csv", index=False)
         LOGGER.info(f"Saved calculated variables to {out_dir}")

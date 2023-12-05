@@ -5,6 +5,7 @@ from itertools import chain
 from pathlib import Path
 
 import lXtractor.chain as lxc
+from lXtractor.chain import recover
 from lXtractor.core import ProteinStructure, GenericStructure
 from lXtractor.ext import AlphaFold, PDB, fetch_uniprot
 from lXtractor.util import read_fasta
@@ -52,7 +53,7 @@ class SequenceParser:
             if inp.is_file():
                 return lxc.ChainSequence.from_file(inp)
             elif inp.is_dir():
-                return lxc.ChainSequence.read(inp)
+                return recover(lxc.ChainSequence.read(inp))
             else:
                 raise ValueError(f"Invalid Path input {inp}")
         raise TypeError(f"Unsupported input type {type(inp)} for inp {inp}")
@@ -125,11 +126,12 @@ class StructureParser:
                 gs = self.from_alphafold(inp) if alphafold else self.from_pdb(inp)
         if isinstance(inp, Path):
             if inp.is_dir():
-                return [lxc.ChainStructure.read(inp)]
+                return [recover(lxc.ChainStructure.read(inp))]
             elif inp.is_file():
                 gs = ProteinStructure.read(inp)
             else:
                 raise ValueError(f"Invalid Path input {inp}")
+
         if gs is None:
             raise TypeError(f"Unsupported input type {type(inp)} for inp {inp}")
 
