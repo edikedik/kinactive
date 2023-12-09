@@ -55,7 +55,7 @@ def kinactive():
 @click.option("-P", "--struc_pred", **_DefaultFlagKwsFalse)
 @click.option("-s", "--seq_features", **_DefaultFlagKwsFalse)
 @click.option("-S", "--struc_features", **_DefaultFlagKwsFalse)
-@click.option('-a', '--all_data', **_DefaultFlagKwsFalse)
+@click.option("-a", "--all_data", **_DefaultFlagKwsFalse)
 def fetch(db, seq_pred, struc_pred, seq_features, struc_features, all_data):
     """
     Fetch related data.
@@ -93,17 +93,24 @@ def db(config, overwrite):
     "-o",
     "--out_dir",
     type=click.Path(dir_okay=True, file_okay=False),
-    help="Path to an output directory. If provided, the data sequence or structure "
-    "data collection will be saved to this dir, along with calculated variables "
-    "and predicted labels.",
+    help="A path to an output directory. If provided, the sequence or structure "
+    "data collection, calculated variables and predictions will be saved to this dir.",
 )
 @click.option(
     "-d",
     "--domains",
     is_flag=True,
-    help="The inputs are paths to already extracted chain sequence or chain structure "
-    "domains. Thus, they already exist and won't be saved separately if `out_dir` "
-    "is provided.",
+    help="A flag signifying that the inputs are paths to already extracted chain "
+    "sequence or chain structure domains. Thus, they already exist and won't be saved "
+    "separately if the `out_dir` is provided.",
+)
+@click.option(
+    "-V",
+    "--variables",
+    type=click.Path(exists=True, file_okay=True, dir_okay=False),
+    help="A path to already calculated variables -- an existing CSV file that can be "
+    "loaded into a pandas dataframe and contains variables required for prediction. "
+    "If provided, the inputs will be ignored.",
 )
 @click.option(
     "--pdb_fmt",
@@ -164,6 +171,7 @@ def predict(
     inp_type,
     out_dir,
     domains,
+    variables,
     pdb_fmt,
     af2_fmt,
     str_out_fmt,
@@ -189,6 +197,7 @@ def predict(
     """
     if out_dir:
         out_dir = Path(out_dir)
+        out_dir.mkdir(exist_ok=True, parents=True)
 
     if verbose:
         LOGGER.add(sys.stdout)
@@ -200,8 +209,23 @@ def predict(
             else:
                 LOGGER.add("file_{time}.log")
 
+    if variables is not None:
+        vs = pd.read_csv(variables)
+        LOGGER.info(
+            f"Loaded {vs.shape[1] - 1} existing variables for {len(vs)} objects."
+        )
+        dfp = predict_on_seqs(vs) if inp_type == "s" else predict_on_strs(vs)
+
+        if out_dir:
+            dfp.to_csv(out_dir / "predictions.csv", index=False)
+            LOGGER.info(f"Saved predictions to {out_dir}")
+
+        _print_df(dfp)
+        return
+
+    LOGGER.info(f"Preparing {len(inputs)} inputs.")
     chains = lxc.ChainList(prepare_inputs(inputs, inp_type, pdb_fmt, af2_fmt, altloc))
-    LOGGER.info(f"Initialized {len(chains)} chains")
+    LOGGER.info(f"Initialized {len(chains)} chains.")
 
     if domains:
         extracted = True
@@ -245,16 +269,20 @@ def predict(
                 kw["fmt"] = str_out_fmt
             io = lxc.ChainIO(verbose=verbose, num_proc=num_proc)
             num_saved = ilen(io.write(chains, out_dir / "chains", **kw))
-            LOGGER.info(f"Wrote {num_saved} chains to {chains_dir}")
+            LOGGER.info(f"Wrote {num_saved} chains to {chains_dir}.")
 
         vs.to_csv(out_dir / "variables.csv", index=False)
-        LOGGER.info(f"Saved calculated variables to {out_dir}")
+        LOGGER.info(f"Saved calculated variables to {out_dir}.")
 
         dfp.to_csv(out_dir / "predictions.csv", index=False)
-        LOGGER.info(f"Saved predictions to {out_dir}")
+        LOGGER.info(f"Saved predictions to {out_dir}.")
 
+    _print_df(dfp)
+
+
+def _print_df(df: pd.DataFrame) -> None:
     stream = click.get_text_stream("stdout")
-    dfp.to_string(stream, index=False)
+    df.to_string(stream, index=False)
     stream.write("\n")
 
 
