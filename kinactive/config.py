@@ -221,7 +221,7 @@ class _ColNames:
         ]
 
 
-def load_data_links(path: Path = DATA_LINKS_PATH):
+def load_data_links(path: Path = DATA_LINKS_PATH) -> dict[str, str]:
     with path.open() as f:
         return json.load(f)
 

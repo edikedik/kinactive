@@ -114,6 +114,7 @@ def kinactive():
     **_DefaultFlagKwsFalse,
     help="Remove fetched archive after unpacking.",
 )
+@click.option("-l", "--links", **_DefaultFlagKwsFalse, help="Display data links.")
 @click.option(
     "-o",
     "--out_dir",
@@ -138,6 +139,7 @@ def fetch(
     all_data,
     unpack,
     rm_unpacked,
+    links,
     out_dir,
     verbose,
 ):
@@ -163,6 +165,14 @@ def fetch(
         LOGGER.add(sys.stdout)
 
     data_links = load_data_links()
+
+    if links:
+        for k, v in data_links.items():
+            if k == "version":
+                print(f"Version: {v}")
+                print('Option\tLink')
+            else:
+                print(f"{k}\t{v}")
 
     targets = [
         ("db", db, "lXt-PK database"),
