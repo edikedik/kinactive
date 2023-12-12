@@ -4,6 +4,7 @@
 [![PyPi status](https://img.shields.io/pypi/v/kinactive.svg)](https://pypi.org/project/kinactive)
 [![Python version](https://img.shields.io/pypi/pyversions/kinactive.svg)](https://pypi.org/project/kinactive)
 [![Hatch project](https://img.shields.io/badge/%F0%9F%A5%9A-Hatch-4051b5.svg)](https://github.com/pypa/hatch)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.10256948.svg)](https://doi.org/10.5281/zenodo.10256948)
 
 `KinActive` is a tool for protein kinase (PK) sequences and structures.
 
