@@ -1,0 +1,11 @@
+{
+  "version": 0.2,
+  "db": "https://zenodo.org/records/10256948/files/lXt-PK.tar.gz?download=1",
+  "pdb_struc_pred": "https://zenodo.org/records/10256948/files/pdb_predictions.tar.gz?download=1",
+  "pdb_struc_features": "https://zenodo.org/records/10256948/files/default_str_vs.tar.gz?download=1",
+  "pdb_lig_features": "https://zenodo.org/records/10256948/files/default_lig_vs.tar.gz?download=1",
+  "pdb_seq_features": "https://zenodo.org/records/10256948/files/defaults_str_seq_vs.tar.gz?download=1",
+  "pdb_can_seq_features": "https://zenodo.org/records/10256948/files/defaults_can_seq_vs.tar.gz?download=1",
+  "sp_seq_pred": "https://zenodo.org/records/10256948/files/sp_predictions.tar.gz?download=1",
+  "sp_model_seq_features": "https://zenodo.org/records/10256948/files/sp_variables.tar.gz?download=1"
+}

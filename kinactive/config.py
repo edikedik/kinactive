@@ -1,10 +1,13 @@
 """
 Configuration dataclasses for the database, matrix and io.
 """
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
 from lXtractor.core.exceptions import MissingData
+
+from kinactive.base import DATA_LINKS_PATH
 
 PK_NAME = "PK"
 DFG_MAP = {"in": 0, "out": 1, "other": 2}
@@ -216,6 +219,11 @@ class _ColNames:
             *self.dfg_proba_cols,
             *self.dfg_meta_proba_cols,
         ]
+
+
+def load_data_links(path: Path = DATA_LINKS_PATH):
+    with path.open() as f:
+        return json.load(f)
 
 
 DumpNames = _DumpNames()

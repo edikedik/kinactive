@@ -2,6 +2,7 @@ from pathlib import Path
 
 from toolz import valmap
 
+
 SEQ_MODEL_NAMES = {
     "TkST": "TkST_XGB_classifier",
     "AAIO_Tk": "AAIO_Tk_XGB_classifier",
@@ -21,6 +22,8 @@ DFG_SEQ_CLASSES = {0: "DFG-in", 1: "DFG-out"}
 
 TK_PROFILE_PATH = RESOURCES_PATH / "PF07714.hmm"
 PK_PROFILE_PATH = RESOURCES_PATH / "PF00069.hmm"
+
+DATA_LINKS_PATH = RESOURCES_PATH / "data_links.json"
 
 
 if __name__ == "__main__":

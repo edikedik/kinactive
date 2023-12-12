@@ -3,15 +3,17 @@ import typing as t
 from collections import abc
 from itertools import chain
 from pathlib import Path
+from shutil import unpack_archive
 
 import click
 import lXtractor.chain as lxc
 import pandas as pd
+from lXtractor.util import fetch_to_file
 from loguru import logger as LOGGER
 from more_itertools import ilen
 from toolz import curry
 
-from kinactive.config import ColNames
+from kinactive.config import ColNames, load_data_links
 from kinactive.db import DB
 from kinactive.features import (
     load_seq_model_features,
@@ -50,17 +52,152 @@ def kinactive():
 
 
 @kinactive.command("fetch", no_args_is_help=True)
-@click.option("-d", "--db", **_DefaultFlagKwsFalse)
-@click.option("-p", "--seq_pred", **_DefaultFlagKwsFalse)
-@click.option("-P", "--struc_pred", **_DefaultFlagKwsFalse)
-@click.option("-s", "--seq_features", **_DefaultFlagKwsFalse)
-@click.option("-S", "--struc_features", **_DefaultFlagKwsFalse)
-@click.option("-a", "--all_data", **_DefaultFlagKwsFalse)
-def fetch(db, seq_pred, struc_pred, seq_features, struc_features, all_data):
+@click.option(
+    "--db",
+    **_DefaultFlagKwsFalse,
+    help="lXtractor data collection of PK sequences and structures.",
+)
+@click.option(
+    "--pdb_struc_pred",
+    **_DefaultFlagKwsFalse,
+    help="DFG and active/inactive predictions for all structural domains in the lXt-PK "
+    "data collection produced by DFGclassifier and KinActive models.",
+)
+@click.option(
+    "--pdb_struc_features",
+    **_DefaultFlagKwsFalse,
+    help="Default feature set for all structural domains in the lXt-PK data "
+    "collection.",
+)
+@click.option(
+    "--pdb_lig_features",
+    **_DefaultFlagKwsFalse,
+    help="Default feature set of ligand variables for all structural domain in the "
+    "lXt-PK data collection.",
+)
+@click.option(
+    "--pdb_seq_features",
+    **_DefaultFlagKwsFalse,
+    help="Default feature set for all domain structure sequences in the lXt-PK "
+    "data collection.",
+)
+@click.option(
+    "--pdb_can_seq_features",
+    **_DefaultFlagKwsFalse,
+    help="Default feature set for domains of all canonical UniProt sequences "
+    "encompassed by the lXt-PK data collection.",
+)
+@click.option(
+    "--sp_seq_pred",
+    **_DefaultFlagKwsFalse,
+    help="Predictions of DFG-in/DFG-out conformational propensities for all PK domains "
+    "found in SwissProt.",
+)
+@click.option(
+    "--sp_model_seq_features",
+    **_DefaultFlagKwsFalse,
+    help="A set of sequence variables necessary to run all sequence-based models for "
+    "all PK domains in SwissProt.",
+)
+@click.option(
+    "-a", "--all_data", **_DefaultFlagKwsFalse, help="Download all available data."
+)
+@click.option(
+    "-u",
+    "--unpack",
+    **_DefaultFlagKwsFalse,
+    help="Unpack each downloaded tar.gz archive.",
+)
+@click.option(
+    "-r",
+    "--rm_unpacked",
+    **_DefaultFlagKwsFalse,
+    help="Remove fetched archive after unpacking.",
+)
+@click.option(
+    "-o",
+    "--out_dir",
+    help="A path to a directory where to save files. If not provided, the current "
+    "working directory will be used.",
+)
+@click.option(
+    "-v",
+    "--verbose",
+    **_DefaultFlagKwsFalse,
+    help="Output basic logging information to stdout.",
+)
+def fetch(
+    db,
+    pdb_struc_pred,
+    pdb_struc_features,
+    pdb_lig_features,
+    pdb_seq_features,
+    pdb_can_seq_features,
+    sp_seq_pred,
+    sp_model_seq_features,
+    all_data,
+    unpack,
+    rm_unpacked,
+    out_dir,
+    verbose,
+):
     """
-    Fetch related data.
+    A simple utility to fetch related data.
+
+    All options except `out_dir` are flags.
+
+    Usage example: `kinactive fetch --pdb_struc_pred --sp_seq_pred -vru` will
+    fetch ML model predictions for SwissProt sequences and PDB structures,
+    unpack fetched archives, remove them, and output basic logging info.
+
+    To fetch the data manually, navigate to
+    https://zenodo.org/doi/10.5281/zenodo.10256947
     """
-    pass
+    if out_dir is None:
+        out_dir = Path.cwd()
+    else:
+        out_dir = Path(out_dir)
+        out_dir.mkdir(exist_ok=True, parents=True)
+
+    if verbose:
+        LOGGER.add(sys.stdout)
+
+    data_links = load_data_links()
+
+    targets = [
+        ("db", db, "lXt-PK database"),
+        (
+            "pdb_struc_pred",
+            pdb_struc_pred,
+            "structure-based predictions for PDB models",
+        ),
+        ("pdb_struc_features", pdb_struc_features, "PDB domains' structural features"),
+        ("pdb_lig_features", pdb_lig_features, "PDB domains' ligand-related features"),
+        ("pdb_seq_features", pdb_seq_features, "PDB domains' sequence features"),
+        (
+            "pdb_can_seq_features",
+            pdb_can_seq_features,
+            "PDB domains' features for related canonical seqs",
+        ),
+        ("sp_seq_pred", sp_seq_pred, "predictions for SwissProt sequences"),
+        (
+            "sp_model_seq_features",
+            sp_model_seq_features,
+            "features for SwissProt sequences",
+        ),
+    ]
+    for t_name, t_arg, t_desc in targets:
+        if t_arg or all_data:
+            LOGGER.info(f"Fetching {t_desc}.")
+            t_path = fetch_to_file(data_links[t_name], root_dir=out_dir)
+            if unpack:
+                LOGGER.info(f"Unpacking {t_path}")
+                unpack_archive(t_path, out_dir, "gztar")
+                if rm_unpacked:
+                    t_path.unlink()
+            # LOGGER.info(f"Finished fetching {t_desc}")
+
+    LOGGER.info("Done fetching data")
 
 
 @kinactive.command("db", no_args_is_help=True)
