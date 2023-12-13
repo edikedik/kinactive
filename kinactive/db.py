@@ -11,7 +11,6 @@ from itertools import chain
 from pathlib import Path
 from random import sample
 
-from lXtractor.core.config import DefaultConfig
 import pandas as pd
 from lXtractor.chain import (
     Chain,
@@ -20,11 +19,11 @@ from lXtractor.chain import (
     ChainList,
     ChainSequence,
     ChainStructure,
-    read_chains,
-    ChainIOConfig,
+    recover,
 )
+from lXtractor.core.config import DefaultConfig
 from lXtractor.core.segment import resolve_overlaps
-from lXtractor.ext import PDB, PyHMMer, SIFTS, fetch_uniprot, filter_by_method, Pfam
+from lXtractor.ext import PDB, PyHMMer, SIFTS, fetch_uniprot, filter_by_method
 from lXtractor.util import get_files, read_fasta, write_fasta
 from more_itertools import ilen, consume, unzip
 from toolz import curry, groupby, itemmap, keyfilter, keymap
@@ -503,26 +502,64 @@ class DB:
                 df.to_csv(dest / name, index=False)
                 LOGGER.info(f"Saved summary file {name} to {dest}")
 
-    def load(self, dump: Path | abc.Iterable[Path]) -> ChainList[Chain]:
+    @staticmethod
+    def _construct_paths(
+        paths: abc.Iterable[Path],
+        domains: bool,
+        structures: bool,
+    ):
+        if domains:
+            paths = chain.from_iterable(p.glob("segments/*") for p in paths)
+        if structures:
+            paths = chain.from_iterable(p.glob("structures/*") for p in paths)
+        return paths
+
+    def load(
+        self,
+        dump: Path | abc.Iterable[Path],
+        domains: bool = True,
+        sequences: bool = False,
+        structures: bool = False,
+        structures_sequences: bool = False,
+    ) -> ChainList[Chain] | ChainList[ChainStructure] | ChainList[ChainSequence]:
         """
         Load prepared db.
 
         :param dump: Path with dumped :class:`Chain`s.
+        :param domains: Load domains without loading parent chains.
+        :param sequences: Load only canonical sequences.
+        :param structures: Load structures without loading canonical sequences.
+        :param structures_sequences: Load structure sequences without loading
+            structures.
         :return: A chain list with initialized :class:`Chain`s.
         """
 
         if isinstance(dump, Path):
             dump = dump.glob("*")
 
-        dump = list(dump)
+        dump = list(
+            self._construct_paths(dump, domains, structures or structures_sequences)
+        )
         LOGGER.info(f"Got {len(dump)} initial paths to read")
 
-        chains = read_chains(
-            dump,
-            children=True,
-            seq_cfg=ChainIOConfig(verbose=self.cfg.verbose),
-            str_cfg=ChainIOConfig(verbose=self.cfg.verbose, num_proc=self.cfg.io_cpus),
+        io = ChainIO(self.cfg.io_cpus, self.cfg.verbose)
+        if structures:
+            loader = io.read_chain_str
+        elif sequences or structures_sequences:
+            loader = io.read_chain_seq
+        else:
+            loader = io.read_chain
+
+        chains = ChainList(
+            loader(dump, callbacks=[recover], search_children=not domains)
         )
+
+        # chains = read_chains(
+        #     dump,
+        #     children=True,
+        #     seq_cfg=ChainIOConfig(verbose=self.cfg.verbose),
+        #     str_cfg=ChainIOConfig(verbose=self.cfg.verbose, num_proc=self.cfg.io_cpus),
+        # )
         # chains = chains.apply(
         #     chain_tree.recover,
         #     verbose=self.cfg.verbose,
@@ -537,15 +574,6 @@ class DB:
         self._chains = chains
 
         return chains
-
-    def fetch(self):
-        """
-        Fetch an already prepared data collection.
-
-        :return:
-        """
-        # TODO: implement fetching and unpacking
-        raise NotImplementedError
 
 
 if __name__ == "__main__":
