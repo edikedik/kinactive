@@ -1,10 +1,13 @@
 """
 Configuration dataclasses for the database, matrix and io.
 """
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
 from lXtractor.core.exceptions import MissingData
+
+from kinactive.base import DATA_LINKS_PATH
 
 PK_NAME = "PK"
 DFG_MAP = {"in": 0, "out": 1, "other": 2}
@@ -42,9 +45,17 @@ class DBConfig:
     init_cpus: int = 1
     #: #cpus for pairwise sequence alignments. Increase to max number possible.
     init_map_numbering_cpus: int = 1
+    #: #cpus for adding structures to a chain. Valid if `init_map_numbering_cpus`
+    #: is > 1.
+    init_add_structure_cpus: int = 1
+    #: Tolerate initialization failures. Should be ``True`` unless testing
+    init_tolerate_failures: bool = True
 
     #: A path to the PK profile (supplied with the package)
-    profile: Path = Path(__file__).parent / "resources" / "Pkinase.hmm"
+    profile: Path = Path(__file__).parent / "resources" / "PF00069.hmm"
+
+    #: A map between TK and PK profile nodes
+    tk2pk: Path = Path(__file__).parent / "resources" / "tk2pk.json"
 
     #: the domain name to use for extraction.
     pk_map_name: str = PK_NAME
@@ -55,19 +66,19 @@ class DBConfig:
     #: min domain size for structure sequences.
     pk_min_str_domain_size: int = 100
     #: min coverage of the hmm nodes.
-    pk_min_cov_hmm: float = 0.7
+    pk_min_cov_hmm: float = 0.5
     #: min coverage of the sequence.
-    pk_min_cov_seq: float = 0.7
+    pk_min_cov_seq: float = 0.5
     #: min matching residues' fraction between structure and canonical sequences.
-    pk_min_str_seq_match: float = 0.9
+    pk_min_str_seq_match: float = 0.8
 
     #: minimum sequence size to filter raw sequences from UniProt.
     min_seq_size: int = 150
     #: maximum sequence size to filter raw sequences from UniProt.
-    max_seq_size: int = 3000
+    max_seq_size: int = 5000
 
     #: PDB files format.
-    pdb_fmt: str = "cif"
+    pdb_fmt: str = "mmtf.gz"
     #: The number of threads to use when fetching data from the PDB.
     pdb_num_fetch_threads: int = 10
     #: The minimum structure size (in residues) to filter raw structures.
@@ -117,10 +128,11 @@ class _DumpNames:
     cls_keyword: str = "classifier"
     reg_keyword: str = "regressor"
 
-    model_filename: str = "model.bin"
-    features_filename: str = "features.txt"
-    targets_filename: str = "targets.txt"
-    params_filename: str = "params.json"
+    bin_model: str = "model.bin"
+    json_model: str = "model.json"
+    features: str = "features.txt"
+    targets: str = "targets.txt"
+    params: str = "params.json"
 
     in_model_dirname: str = "in"
     out_model_dirname: str = "out"
@@ -174,6 +186,11 @@ class _ColNames:
     dfg_out_meta_prob: str = "out_meta_prob"
     dfg_other_meta_prob: str = "other_meta_prob"
 
+    ahao_col = "DFGout_holo"
+    aaio_col = "DFGout_apo"
+    ahao_prob_col = "DFGout_holo_prob"
+    aaio_prob_col = "DFGout_apo_prob"
+
     rmsd_ca: str = "RMSD_CA"
     rmsd_df: str = "RMSD_DF"
     id_fix: str = "ID_fix"
@@ -202,6 +219,11 @@ class _ColNames:
             *self.dfg_proba_cols,
             *self.dfg_meta_proba_cols,
         ]
+
+
+def load_data_links(path: Path = DATA_LINKS_PATH) -> dict[str, str]:
+    with path.open() as f:
+        return json.load(f)
 
 
 DumpNames = _DumpNames()

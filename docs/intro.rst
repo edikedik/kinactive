@@ -29,11 +29,36 @@ either directly (see the `mafft docs`_) or using ``conda``::
 
     conda install -c bioconda mafft
 
+Using the command-line interface
+--------------------------------
+
+`KinActive` provides a command-line interface for main functionalities. After installing
+the tool, execute ``kinactive`` in the terminal to see the available commands::
+
+    Usage: kinactive [OPTIONS] COMMAND [ARGS]...
+
+    KinActive: a CLI tool for protein kinase structures and sequences.
+
+    Author   : Ivan Reveguk.
+
+    Email    : ivan.reveguk@gmail.com
+
+    Options:
+    -h, --help  Show this message and exit.
+
+    Commands:
+    db       Construct or update a new database.
+    fetch    A simple utility to fetch related data.
+    predict  Predict labels for a small number of sequences or structures.
+
+The basic CLI tool usage is described
+`on GitHub <https://github.com/edikedik/kinactive>`_.
+
 Using the data
 --------------
 
 ``KinActive`` is not supplied with the raw data.
-One may fetch the data accompanying the paper (see
+One may fetch the data accompanying the paper (see above or
 :doc:`Fetching the data <fetching>`) or build a new raw collection (see
 :doc:`Build a new lXt-PK collection <notebooks/build_raw_database>`).
 
@@ -113,8 +138,8 @@ a logistic regression meta-classifier outputting final predictions.
 
 Both models can be used in the same manner. They require a dataset with
 :meth:`kinactive.model.KinActiveClassifier.features` and
-:meth:`kinactive.model.KinActiveClassifier.targets` columns to predict. Assuming
-the ``df`` variable to encapsulate such a dataset (as a `pandas DataFrame`_).
+:meth:`kinactive.model.KinActiveClassifier.targets` columns for prediction.
+Assuming the ``df`` variable to encapsulate such a dataset (as a `pandas DataFrame`_).
 
 .. code-block:: python
 

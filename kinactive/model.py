@@ -7,22 +7,29 @@ import logging
 import operator as op
 import re
 import typing as t
+import warnings
 from abc import ABCMeta, abstractmethod
 from collections import abc
 from itertools import chain
 from statistics import mean
 
-import numpy as np
-import optuna
-import pandas as pd
-from eBoruta import eBoruta
-from more_itertools import unique_everseen
-from sklearn.metrics import f1_score, r2_score
-from toolz import curry
-from tqdm.auto import tqdm
-from xgboost import XGBClassifier, XGBRegressor
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore")
 
-from kinactive.config import ColNames, DFG_MAP_REV
+    import numpy as np
+    import optuna
+    import pandas as pd
+
+    from eBoruta import eBoruta, Dataset, TrialData, Features
+    from more_itertools import unique_everseen
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import f1_score, r2_score
+    from toolz import curry
+    from tqdm.auto import tqdm
+    from xgboost import XGBClassifier, XGBRegressor
+
+    from kinactive.config import ColNames, DFG_MAP_REV
 
 PDB_PATTERN = re.compile(r"\((\w{4}):\w+\|")
 LOGGER = logging.getLogger(__name__)
@@ -32,6 +39,13 @@ class ModelBase(metaclass=ABCMeta):
     """
     An abstract base class for model objects.
     """
+
+    @property
+    @abstractmethod
+    def features(self) -> abc.Sequence[str]:
+        """
+        :return: A sequence of features available for the model.
+        """
 
     @property
     @abstractmethod
@@ -167,6 +181,7 @@ def xgb_objective(
         "reg_alpha": trial.suggest_float("reg_alpha", 0, 10.0),
         "colsample_bytree": trial.suggest_float("colsample_bytree", 0.4, 1.0),
         "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.4, 1.0),
+        "subsample": trial.suggest_float("subsample", 0.4, 1.0),
     }
     if isinstance(model, KinactiveClassifier):
         params["scale_pos_weight"] = trial.suggest_float("scale_pos_weight", 0.0, 10.0)
@@ -176,7 +191,13 @@ def xgb_objective(
     # callback = optuna.integration.XGBoostPruningCallback(trial, 'validation_logloss')
     params = {**model.params, **params}
     model = model.__class__(
-        model.model, model.targets, model.features, params, use_early_stopping
+        model.model,
+        model.targets,
+        model.features,
+        params,
+        use_early_stopping,
+        cv_col=model.cv_col,
+        weight_col=model.weight_col,
     )
     return model.cv(df, n_cv)
 
@@ -224,7 +245,7 @@ def lr_objective(
             "multi_class", ["auto", "ovr", "multinomial"]
         ),
         "max_iter": 1000,
-        "n_jobs": -1,
+        # "n_jobs": -1,
     }
     if params["solver"] in ["newton-cg", "sag", "lbfgs"]:
         params["penalty"] = "l2"
@@ -238,7 +259,61 @@ def lr_objective(
 
     params = {**model.params, **params}
     model = model.__class__(
-        model.model, model.targets, model.features, params, use_early_stopping
+        model.model,
+        model.targets,
+        model.features,
+        params,
+        use_early_stopping,
+        cv_col=model.cv_col,
+        weight_col=model.weight_col,
+    )
+    score = model.cv(df, n_cv)
+    return score
+
+
+def rf_objective(
+    trial: optuna.Trial,
+    df: pd.DataFrame,
+    model: KinactiveModel,
+    n_cv: int = 5,
+    use_early_stopping: bool = False,
+) -> float:
+    """
+    A default objective function for random forests.
+
+    :param trial: A trial instance used dynamically by optuna. Leave as is.
+    :param df: A dataset used to fit and test the model.
+    :param model: The model to optimize the params for.
+    :param n_cv: The number of CV folds to derive the score.
+    :param use_early_stopping: Passed to the ``model``.
+    :return: The cross-validated score.
+    """
+    params = {
+        "n_estimators": trial.suggest_int("n_estimators", 10, 500),
+        "criterion": trial.suggest_categorical(
+            "criterion", ["gini", "entropy", "log_loss"]
+        ),
+        "max_depth": trial.suggest_int("max_depth", 2, 16),
+        "max_features": trial.suggest_categorical(
+            "max_features", ["sqrt", "log2", None]
+        ),
+        "bootstrap": trial.suggest_categorical("bootstrap", [True, False]),
+        "ccp_alpha": trial.suggest_float("ccp_alpha", 0.0, 1.0),
+    }
+    if isinstance(model, KinactiveClassifier):
+        params["class_weight"] = trial.suggest_categorical(
+            "class_weight", ["balanced", "balanced_subsample", None]
+        )
+
+    params = {**model.params, **params}
+    model = model.__class__(
+        model.model,
+        model.targets,
+        model.features,
+        params,
+        use_early_stopping,
+        cv_col=model.cv_col,
+        weight_col=model.weight_col,
     )
     score = model.cv(df, n_cv)
     return score
@@ -265,6 +340,8 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
         params: dict[str, t.Any] | None = None,
         use_early_stopping: bool = False,
         selector: eBoruta | None = None,
+        cv_col: str = "ObjectID",
+        weight_col: str | None = None,
     ):
         """
         :param model: A model defining ``fit`` and ``predict`` methods.
@@ -273,6 +350,8 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
         :param targets: Target variables' names.
         :param features: Feature variables' names.
         :param params: Initial parameters for the model.
+        :param cv_col: A col used to generate non-overlapping CV folds.
+        :param weight_col: A col pointing to sample weights.
         :param use_early_stopping: If ``True``, and the model is either
             ``XGBClassifier`` or ``XGBRegressor``, the :meth:`train` will
             split the provided dataset into training and evaluation parts
@@ -289,6 +368,10 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
         self._features = features
         self._targets = targets
         self._model = model
+        #: A column pointing to values used to generate CV folds.
+        self.cv_col = cv_col
+        #: A column pointing to sample weights.
+        self.weight_col = weight_col
         #: Model's parameters.
         self.params = params or {}
         #: Use early stopping via eval set.
@@ -326,24 +409,32 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
             self.model, (XGBClassifier, XGBRegressor)
         ):
             train_idx, eval_idx = next(self.generate_fold_idx(df, 10))
-            train_df, train_ys = _get_xy(df[train_idx], self.features, self.targets)
-            eval_df, eval_ys = _get_xy(df[eval_idx], self.features, self.targets)
+            train_df, train_ys, train_ws = _get_xy(
+                df[train_idx], self.features, self.targets, self.weight_col
+            )
+            eval_df, eval_ys, eval_ws = _get_xy(
+                df[eval_idx], self.features, self.targets, self.weight_col
+            )
             self._model.fit(
                 train_df,
                 np.squeeze(train_ys.values),
+                sample_weight=train_ws,
                 eval_set=[(eval_df, np.squeeze(eval_ys.values))],
+                sample_weight_eval_set=[eval_ws],
                 verbose=0,
             )
         else:
             assert (
                 "early_stopping_rounds" not in self.params
             ), "Must not have early stopping params if `use_early_stopping` is `False`"
-            xs, ys = _get_xy(df, self.features, self.targets)
+            xs, ys, ws = _get_xy(df, self.features, self.targets, self.weight_col)
             assert ys is not None, f"failed finding target variables {self.targets}"
             if isinstance(self.model, (XGBClassifier, XGBRegressor)):
-                self._model.fit(xs.values, np.squeeze(ys.values), verbose=0)
+                self._model.fit(
+                    xs.values, np.squeeze(ys.values), sample_weight=ws, verbose=0
+                )
             else:
-                self._model.fit(xs.values, np.squeeze(ys.values))
+                self._model.fit(xs.values, np.squeeze(ys.values), sample_weight=ws)
 
     def predict(self, df: pd.DataFrame) -> np.ndarray:
         df = _apply_selection(df, self.features)
@@ -370,6 +461,7 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
         self,
         df: pd.DataFrame,
         n_trials: int,
+        n_cv: int = 5,
         direction: str = "maximize",
         early_stopping_rounds: int = 0,
     ) -> optuna.Study:
@@ -378,18 +470,23 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
 
         :param df: Input data with features and target columns.
         :param n_trials: The number of optimization rounds.
+        :param n_cv: The number of CV folds to use within the objective.
         :param direction: "maximize" or "minimize" the objective.
         :param early_stopping_rounds: The number of early stopping rounds to use.
             Zero means no early stopping.
         :return: The ``Study`` instance from optuna.
         """
-        objective_fn = (
-            xgb_objective
-            if isinstance(self.model, (XGBClassifier, XGBRegressor))
-            else lr_objective
-        )
-        objective = curry(objective_fn)(
-            df=df, model=self, use_early_stopping=self.use_early_stopping
+        if isinstance(self.model, (XGBClassifier, XGBRegressor)):
+            obj = xgb_objective
+        elif isinstance(self.model, RandomForestClassifier):
+            obj = rf_objective
+        elif isinstance(self.model, LogisticRegression):
+            obj = lr_objective
+        else:
+            raise TypeError("Unsupported model type")
+
+        objective = curry(obj)(
+            df=df, model=self, n_cv=n_cv, use_early_stopping=self.use_early_stopping
         )
         study = optuna.create_study(direction=direction)
         cb = (
@@ -398,25 +495,44 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
             else None
         )
         study.optimize(objective, n_trials=n_trials, callbacks=cb)
-        self.params = study.best_params
+        self.params = {**self.params, **study.best_params}
+        self.reinit_model()
         return study
 
-    def select_features(self, df: pd.DataFrame, **kwargs) -> eBoruta:
+    def select_features(self, df: pd.DataFrame, n_folds: int = 10, **kwargs) -> eBoruta:
         """
         Select important features and store the selection to :meth:`features`.
 
         :param df: A dataframe with features and targets.
         :param kwargs: Passed to the :attr:`selector`.
+        :param n_folds: A number of CV folds to assess performance during
+            evaluation for early stopping XGBoost callback.
         :return: The ``selector.fit()`` output.
         """
         if self.selector is None:
             self.selector = eBoruta(**kwargs)
-        df_x, df_y = _get_xy(df, self.features, self.targets)
+        df_x, df_y, ws = _get_xy(df, self.features, self.targets, self.weight_col)
         assert df_y is not None
+        self.reinit_model()
+        if "early_stopping_rounds" in self.params and isinstance(
+            self.model, (XGBClassifier, XGBRegressor)
+        ):
+            obj_ids = df[self.cv_col].values
+            target = None
+            if isinstance(self.model, XGBClassifier):
+                target = np.squeeze(df[self.targets].values)
+            callbacks = [EvalSetSupplier(obj_ids, target, n_folds)]
+        else:
+            callbacks = None
         res = self.selector.fit(
-            df_x, np.squeeze(df_y.values), model=self.model, verbose=0
+            df_x,
+            np.squeeze(df_y.values),
+            ws,
+            model=self.model,
+            callbacks_trial_start=callbacks,
         )
         self._features = list(res.features_.accepted)
+        self.reinit_model()
         return res
 
     def rank_features(self, features: abc.Sequence[str] | None, **kwargs):
@@ -445,7 +561,7 @@ class KinactiveClassifier(KinactiveModel):
         self, df: pd.DataFrame, n: int
     ) -> abc.Iterator[tuple[np.ndarray, np.ndarray]]:
         return _generate_stratified_fold_idx(
-            df["ObjectID"].values, np.squeeze(df[self.targets].values), n
+            df[self.cv_col].values, np.squeeze(df[self.targets].values), n
         )
 
     def predict_proba(self, df: pd.DataFrame) -> np.ndarray:
@@ -471,13 +587,19 @@ class KinactiveClassifier(KinactiveModel):
         """
         y_pred = self.predict(df)
         y_true = np.squeeze(df[self.targets].values)
-        if (
-            len(self.targets) > 1
-            or len(np.bincount(y_true)) > 2
-            or len(np.bincount(y_pred)) > 2
-            and "average" not in kwargs
-        ):
-            kwargs["average"] = "micro"
+        try:
+            if (
+                len(self.targets) > 1
+                or len(np.bincount(y_true)) > 2
+                or len(np.bincount(y_pred)) > 2
+                and "average" not in kwargs
+            ):
+                kwargs["average"] = "micro"
+        except Exception as e:
+            LOGGER.warning("Failed to infer the number of classes; Exception below")
+            LOGGER.exception(e)
+        if "zero_division" not in kwargs:
+            kwargs["zero_division"] = 0
         return f1_score(y_true, y_pred, **kwargs)
 
 
@@ -489,7 +611,7 @@ class KinactiveRegressor(KinactiveModel):
     def generate_fold_idx(
         self, df: pd.DataFrame, n: int
     ) -> abc.Iterator[tuple[np.ndarray, np.ndarray]]:
-        return _generate_fold_idx(df["ObjectID"].map(_get_unique_group).values, n)
+        return _generate_fold_idx(df[self.cv_col].map(_get_unique_group).values, n)
 
     def score(self, df: pd.DataFrame, **kwargs) -> float:
         """
@@ -531,8 +653,18 @@ class DFGClassifier(ModelBase):
         out_model: KinactiveClassifier,
         other_model: KinactiveClassifier,
         meta_model: KinactiveClassifier,
+        cv_col: str = "ObjectID",
     ):
         self.models: DFGModels = DFGModels(in_model, out_model, other_model, meta_model)
+        self.cv_col = cv_col
+
+    @property
+    def features(self) -> abc.Sequence[str]:
+        """
+        This returns :meth:`dfg_features` and exists for compatability with the
+        :class:`ModelBase`.
+        """
+        return self.dfg_features
 
     @property
     def targets(
@@ -632,7 +764,7 @@ class DFGClassifier(ModelBase):
         self, df: pd.DataFrame, n: int
     ) -> abc.Iterator[tuple[np.ndarray, np.ndarray]]:
         return _generate_stratified_fold_idx(
-            df["ObjectID"].values, np.squeeze(df[self.targets].values), n
+            df[self.cv_col].values, np.squeeze(df[self.targets].values), n
         )
 
     def cv(self, df: pd.DataFrame, n: int, verbose: bool = True):
@@ -682,6 +814,47 @@ class EarlyStoppingCallback:
                 f"Stopping optimization at max iter {self.early_stopping_rounds}"
             )
             study.stop()
+
+
+class EvalSetSupplier:
+    def __init__(
+        self,
+        obj_ids: np.ndarray | abc.Sequence[t.Hashable],
+        target: abc.Sequence[int] | None,
+        n_folds: int,
+    ):
+        self.target = target
+        self.obj_ids = obj_ids
+        self.n_folds = n_folds
+
+    def generate_fold_idx(self):
+        if self.target is None:
+            return next(_generate_fold_idx(self.obj_ids, self.n_folds))
+        return next(
+            _generate_stratified_fold_idx(self.obj_ids, self.target, self.n_folds)
+        )
+
+    def __call__(
+        self,
+        estimator,
+        features: Features,
+        dataset: Dataset,
+        trial_data: TrialData,
+        **kwargs,
+    ):
+        assert len(self.obj_ids) == len(trial_data.x_train)
+        train_idx, eval_idx = self.generate_fold_idx()
+        x_train, y_train = trial_data.x_train[train_idx], trial_data.y_train[train_idx]
+        x_eval, y_eval = trial_data.x_train[eval_idx], trial_data.y_train[eval_idx]
+        if trial_data.w_train is not None:
+            w_train, w_eval = trial_data.w_train[train_idx], trial_data.w_test[eval_idx]
+            kwargs["sample_weight_eval_set"] = [w_eval]
+        else:
+            w_train = None
+        kwargs["eval_set"] = [(x_eval, y_eval)]
+        kwargs["verbose"] = False
+        new_trial_data = TrialData(x_train, x_train, y_train, y_train, w_train, w_train)
+        return estimator, features, dataset, new_trial_data, kwargs
 
 
 def _apply_selection(df: pd.DataFrame, features: list[str]):
@@ -746,11 +919,15 @@ def _get_unique_group(obj_id: str) -> str:
 
 
 def _get_xy(
-    df, features: list[str], targets: list[str] | None
-) -> tuple[pd.DataFrame, pd.DataFrame | None]:
+    df,
+    features: list[str],
+    targets: list[str] | None,
+    weight: str | None,
+) -> tuple[pd.DataFrame, pd.DataFrame | None, np.ndarray | None]:
     ys = _apply_selection(df, targets) if targets else None
+    ws = df[weight].values if weight else None
     df = _apply_selection(df, features)
-    return df, ys
+    return df, ys, ws
 
 
 def _cross_validate(
@@ -816,14 +993,20 @@ def make(
     targets: list[str],
     features: list[str],
     starting_params: dict[str, t.Any],
+    cv_col: str = "ObjectID",
+    weight_col: str | None = None,
     use_early_stopping: bool = False,
     early_stopping_rounds_param_sel: int = 0,
+    base_model=None,
     classifier: bool = True,
     n_trials_sel_1: int = 50,
     n_trials_sel_2: int = 50,
+    n_cv_sel_1: int = 10,
+    n_cv_sel_2: int = 10,
     n_final_cv: int = 10,
+    n_folds_fs: int = 10,
     boruta_kwargs: dict[str, t.Any] | None = None,
-) -> tuple[KinactiveClassifier | KinactiveRegressor, float, pd.DataFrame]:
+) -> tuple[KinactiveClassifier | KinactiveRegressor, float, pd.DataFrame, pd.DataFrame]:
     """
     A pipeline to make a new ``KinActive`` model. It comprises:
 
@@ -838,11 +1021,17 @@ def make(
     :param targets: The names of the target columns.
     :param features: The names of the feature columns.
     :param starting_params: The starting model's parameters.
+    :param cv_col: A column used to generate CV folds. The folds will be built
+        such that the values this column points to will never overlap between
+        folds.
+    :param weight_col: Optionally, a column name pointing to the sample weights.
     :param use_early_stopping: Use early stopping to cap the number of trees.
         The ``early_stopping_rounds`` param may be provided via
-        ``starting_params``.
+        ``starting_params``. Valid for the XGBoost models.
     :param early_stopping_rounds_param_sel: The number of early stopping rounds
         for the hyperparameter optimization. ``0`` indicates no early stopping.
+    :param base_model: Initialized based model. Anything supported by
+        :class:`KinactiveClassifier` or :class:`KinactiveRegressor`.
     :param classifier: If ``True``, assume classification objective and init
         the :class:`KinactiveClassifier`. Otherwise, assume the regression and
         init the :class:`KinactiveRegressor`.
@@ -850,6 +1039,12 @@ def make(
         feature selection.
     :param n_trials_sel_2: The number of parameter selection rounds after the
         feature selection.
+    :param n_cv_sel_1: The number of CV folds used to evaluate the performance
+        after the first round of parameter selection.
+    :param n_cv_sel_2: The number of CV folds used to evaluate the performance
+        after the second round of parameter selection.
+    :param n_folds_fs: The number of CV folds used to evaluate the performance
+        during feature selection of an XGBoost model if early stopping is used.
     :param n_final_cv: The number of CV folds for the final CV.
     :param boruta_kwargs: Passed to the ``eBoruta`` feature selector.
     :return:
@@ -858,47 +1053,59 @@ def make(
     taken_names = ["ObjectID", *targets]
     features = features or [c for c in df.columns if c not in taken_names]
 
+    args = dict(
+        targets=targets,
+        features=features,
+        cv_col=cv_col,
+        weight_col=weight_col,
+        params=starting_params,
+        use_early_stopping=use_early_stopping,
+    )
     if classifier:
         model = KinactiveClassifier(
-            XGBClassifier(),
-            targets,
-            features,
-            params=starting_params,
-            use_early_stopping=use_early_stopping,
+            XGBClassifier() if base_model is None else base_model, **args
         )
     else:
         model = KinactiveRegressor(
-            XGBRegressor(),
-            targets,
-            features,
-            params=starting_params,
-            use_early_stopping=use_early_stopping,
+            XGBRegressor() if base_model is None else base_model, **args
         )
 
     if n_trials_sel_1 > 0:
         LOGGER.info(
             f"Selecting params using full feature set for {n_trials_sel_1} trials"
         )
-        model.select_params(df, n_trials_sel_1)
+        model.select_params(
+            df,
+            n_trials_sel_1,
+            early_stopping_rounds=early_stopping_rounds_param_sel,
+            n_cv=n_cv_sel_1,
+        )
         LOGGER.info(f"Final params: {model.params}")
 
     LOGGER.info("Selecting features")
     kwargs = boruta_kwargs or {}
-    model.select_features(df, **kwargs)
+    model.select_features(df, n_folds_fs, **kwargs)
     LOGGER.info(f"Selected {len(model.features)} features")
 
     if n_trials_sel_2 > 0:
         LOGGER.info("Selecting params 2")
         model.select_params(
-            df, n_trials_sel_2, early_stopping_rounds=early_stopping_rounds_param_sel
+            df,
+            n_trials_sel_2,
+            early_stopping_rounds=early_stopping_rounds_param_sel,
+            n_cv=n_cv_sel_2,
         )
         LOGGER.info(f"Final params: {model.params}")
 
     cv_score, df_pred = model.cv_pred(df, n_final_cv, verbose=True)
     LOGGER.info(f"Final CV score: {cv_score}")
+    LOGGER.info("Fitting the final model")
     model.train(df)
 
-    return model, cv_score, df_pred
+    LOGGER.info("Ranking selected features")
+    ranks = model.selector.rank(model.features, model=model.model, sort=True)
+
+    return model, cv_score, df_pred, ranks
 
 
 if __name__ == "__main__":

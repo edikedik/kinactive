@@ -9,11 +9,13 @@ from collections import abc
 from pathlib import Path
 
 import joblib
-from lXtractor.core.exceptions import MissingData
 from lXtractor.util.io import get_files
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
+from toolz import valmap
 from xgboost import XGBClassifier, XGBRegressor
 
+from kinactive.base import SEQ_MODEL_PATHS
 from kinactive.config import DumpNames, ModelPaths
 from kinactive.model import DFGClassifier, KinactiveClassifier, KinactiveRegressor
 
@@ -122,14 +124,14 @@ def save(
         )
     path.mkdir(exist_ok=True, parents=True)
 
-    save_txt_lines(model.targets, path / DumpNames.targets_filename)
-    save_txt_lines(model.features, path / DumpNames.features_filename)
-    save_json(model.params, path / DumpNames.params_filename)
+    save_txt_lines(model.targets, path / DumpNames.targets)
+    save_txt_lines(model.features, path / DumpNames.features)
+    save_json(model.params, path / DumpNames.params)
 
-    if isinstance(model.model, LogisticRegression):
-        save_sklearn(model.model, path / DumpNames.model_filename)
+    if isinstance(model.model, (LogisticRegression, RandomForestClassifier)):
+        save_sklearn(model.model, path / DumpNames.bin_model)
     elif isinstance(model.model, (XGBClassifier, XGBRegressor)):
-        save_xgb(model.model, path / DumpNames.model_filename)
+        save_xgb(model.model, path / DumpNames.json_model)
     else:
         raise TypeError("...")
 
@@ -218,7 +220,12 @@ def load(path: Path) -> KinactiveClassifier | KinactiveRegressor | DFGClassifier
         return load_dfg(path)
     if "classifier" in name:
         cls = KinactiveClassifier
-        cls_type = LogisticRegression if "meta" in name else XGBClassifier
+        if "meta" in name:
+            cls_type = LogisticRegression
+        elif "rf" in name:
+            cls_type = RandomForestClassifier
+        else:
+            cls_type = XGBClassifier
     elif "regressor" in name:
         cls = KinactiveRegressor
         cls_type = XGBRegressor
@@ -227,25 +234,49 @@ def load(path: Path) -> KinactiveClassifier | KinactiveRegressor | DFGClassifier
             'Directory name must contain either "regressor" or "classifier"'
         )
     files = get_files(path)
-    expected_names = [
-        DumpNames.model_filename,
-        DumpNames.features_filename,
-        DumpNames.params_filename,
-    ]
-    for name in expected_names:
-        if name not in files:
-            raise MissingData(f'Missing required file "{name}" in {path}')
+    # expected_names = [
+    #     DumpNames.model_filename,
+    #     DumpNames.features,
+    #     DumpNames.params,
+    # ]
+    # for name in expected_names:
+    #     if name not in files:
+    #         raise MissingData(f'Missing required file "{name}" in {path}')
 
-    targets = load_txt_lines(files[DumpNames.targets_filename])
-    features = load_txt_lines(files[DumpNames.features_filename])
-    params = load_json(files[DumpNames.params_filename])
+    targets = load_txt_lines(files[DumpNames.targets])
+    features = load_txt_lines(files[DumpNames.features])
+    params = load_json(files[DumpNames.params])
 
-    if cls_type is LogisticRegression:
-        model = load_sklearn(files[DumpNames.model_filename])
+    if cls_type in (LogisticRegression, RandomForestClassifier):
+        model = load_sklearn(files[DumpNames.bin_model])
     else:
-        model = load_xgb(files[DumpNames.model_filename], cls_type())
+        if DumpNames.json_model in files:
+            model_path = files[DumpNames.json_model]
+        elif DumpNames.bin_model in files:
+            model_path = files[DumpNames.bin_model]
+        else:
+            raise FileNotFoundError('Failed to find an XGB model file')
+        model = load_xgb(model_path, cls_type())
 
     return cls(model, targets, features, params)
+
+
+def load_seq_models() -> dict[str, KinactiveClassifier]:
+    """
+    Load sequence-based models.
+
+    :return: A dictionary mapping a short model name to the loaded model.
+    """
+    return valmap(load, SEQ_MODEL_PATHS)
+
+
+def load_str_models() -> dict[str, KinactiveClassifier | DFGClassifier]:
+    """
+    Load structure-based models.
+
+    :return: A dictionary mapping a short model name to the loaded model.
+    """
+    return {"kinactive": load_kinactive(), "DFG": load_dfg()}
 
 
 if __name__ == "__main__":
