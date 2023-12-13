@@ -19,7 +19,6 @@ from lXtractor.chain import (
     ChainList,
     ChainSequence,
     ChainStructure,
-    recover,
 )
 from lXtractor.core.config import DefaultConfig
 from lXtractor.core.segment import resolve_overlaps
@@ -58,13 +57,13 @@ def _get_remaining(names: abc.Iterable[str], dir_: Path) -> set[str]:
 
 
 def _is_sequence_of_chain_seqs(
-    s: abc.Sequence[t.Any],
+        s: abc.Sequence[t.Any],
 ) -> t.TypeGuard[abc.Sequence[ChainSequence]]:
     return all(isinstance(x, ChainSequence) for x in s)
 
 
 def _stage_chain_init(
-    seq: T, pdb_chains: abc.Iterable[str], pdb_dir: Path, fmt: str
+        seq: T, pdb_chains: abc.Iterable[str], pdb_dir: Path, fmt: str
 ) -> tuple[T, list[tuple[Path, list[str]]]]:
     id2chains = groupby(op.itemgetter(0), map(lambda x: x.split(":"), pdb_chains))
     path2chains = itemmap(
@@ -76,7 +75,7 @@ def _stage_chain_init(
 
 
 def _filter_by_size(
-    structures: list[ChainStructure], cfg: DBConfig
+        structures: list[ChainStructure], cfg: DBConfig
 ) -> list[ChainStructure]:
     return [s for s in structures if len(s.seq) >= cfg.pdb_str_min_size]
 
@@ -294,10 +293,10 @@ class DB:
         return seqs
 
     def build(
-        self,
-        uniprot_ids: abc.Collection[str] | None = None,
-        pdb_chain_ids: abc.Collection[str] | None = None,
-        n_domains: int = 0,
+            self,
+            uniprot_ids: abc.Collection[str] | None = None,
+            pdb_chain_ids: abc.Collection[str] | None = None,
+            n_domains: int = 0,
     ) -> ChainList[Chain]:
         """
         Build a new lXt-PK data collection.
@@ -325,8 +324,8 @@ class DB:
             match_name = "Match_seq1_seq1_canonical"
             c = c.apply_structures(match_seq).filter_structures(
                 lambda s: (
-                    len(s.seq) >= self.cfg.pk_min_str_domain_size
-                    and s.seq.meta[match_name] >= self.cfg.pk_min_str_seq_match
+                        len(s.seq) >= self.cfg.pk_min_str_domain_size
+                        and s.seq.meta[match_name] >= self.cfg.pk_min_str_seq_match
                 )
             )
             return c
@@ -466,12 +465,12 @@ class DB:
         return chains
 
     def save(
-        self,
-        dest: Path | None = None,
-        chains: abc.Iterable[Chain] | None = None,
-        *,
-        overwrite: bool = False,
-        summary: bool = True,
+            self,
+            dest: Path | None = None,
+            chains: abc.Iterable[Chain] | None = None,
+            *,
+            overwrite: bool = False,
+            summary: bool = True,
     ) -> None:
         """
         Save DB sequence to file system.
@@ -522,6 +521,8 @@ class DB:
         structures: bool = False,
         structures_sequences: bool = False,
     ) -> ChainList[Chain] | ChainList[ChainStructure] | ChainList[ChainSequence]:
+            self, dump: Path | abc.Iterable[Path]
+    ) -> ChainList[Chain]:
         """
         Load prepared db.
 
@@ -552,6 +553,21 @@ class DB:
 
         chains = ChainList(
             loader(dump, callbacks=[recover], search_children=not domains)
+        io = ChainIO(
+            num_proc=self.cfg.io_cpus,
+            verbose=self.cfg.verbose,
+            tolerate_failures=True,
+        )
+        chain_read_it = io.read_chain(
+            dump, callbacks=[chain_tree.recover], search_children=True
+        )
+
+        chains = ChainList(chain_read_it)
+
+        chains = chains.apply(
+            chain_tree.recover,
+            verbose=self.cfg.verbose,
+            desc="Recovering ancestry for sequences and structures",
         )
 
         # chains = read_chains(
