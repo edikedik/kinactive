@@ -28,7 +28,7 @@ dependencies = [
     "pandas",
     "scikit-learn",
     "optuna",
-    "eboruta>0.1"
+    "eboruta>=0.1"
 ]
 dynamic = ["version"]
 
