@@ -24,7 +24,7 @@ with warnings.catch_warnings():
     from more_itertools import unique_everseen
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.linear_model import LogisticRegression
-    from sklearn.metrics import f1_score, r2_score
+    from sklearn.metrics import f1_score
     from toolz import curry
     from tqdm.auto import tqdm
     from xgboost import XGBClassifier, XGBRegressor
@@ -342,6 +342,7 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
         selector: eBoruta | None = None,
         cv_col: str = "ObjectID",
         weight_col: str | None = None,
+        score_fn: abc.Callable[[abc.Sequence, abc.Sequence], float] | None = None
     ):
         """
         :param model: A model defining ``fit`` and ``predict`` methods.
@@ -378,6 +379,8 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
         self.use_early_stopping = use_early_stopping
         #: eBoruta instance
         self.selector = selector
+        #: Custom scoring function
+        self.score_fn = score_fn
 
     @property
     def model(self):
@@ -440,12 +443,14 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
         df = _apply_selection(df, self.features)
         return self._model.predict(df.values)
 
-    def cv(self, df: pd.DataFrame, n: int, verbose: bool = False) -> float:
-        return _cross_validate(self, df, n, verbose)
+    def cv(
+            self, df: pd.DataFrame, n: int, verbose: bool = False, scores: bool = False
+    ) -> float:
+        return _cross_validate(self, df, n, verbose, scores)
 
     def cv_pred(
-        self, df: pd.DataFrame, n: int, verbose: bool = False
-    ) -> tuple[float, pd.DataFrame]:
+        self, df: pd.DataFrame, n: int, verbose: bool = False, scores: bool = False
+    ) -> tuple[float | list[float], pd.DataFrame]:
         """
         Cross-validate the score and predict the data in test folds.
 
@@ -455,7 +460,7 @@ class KinactiveModel(ModelBase, metaclass=ABCMeta):
         :return: A tuple with score and a copy of the supplied dataframe with
             fold assignment and model prediction columns added.
         """
-        return _cross_validate_and_predict(self, df, n, verbose)
+        return _cross_validate_and_predict(self, df, n, verbose, scores)
 
     def select_params(
         self,
@@ -575,13 +580,14 @@ class KinactiveClassifier(KinactiveModel):
         df = _apply_selection(df, self.features)
         return self._model.predict_proba(df.values)
 
-    def score(self, df: pd.DataFrame, **kwargs) -> float:
+    def score(self, df: pd.DataFrame, fn=None, **kwargs) -> float:
         """
         Predict and score using the ``f1_score()`` function. For multiclass
         problems, the ``average`` is "micro" by default unless specified
         otherwise by kwargs.
 
         :param df: A tabular dataset with features and target columns.
+        :param fn: A custom scoring function.
         :param kwargs: Passed to the scoring function.
         :return: The resulting score.
         """
@@ -598,9 +604,15 @@ class KinactiveClassifier(KinactiveModel):
         except Exception as e:
             LOGGER.warning("Failed to infer the number of classes; Exception below")
             LOGGER.exception(e)
-        if "zero_division" not in kwargs:
-            kwargs["zero_division"] = 0
-        return f1_score(y_true, y_pred, **kwargs)
+        if fn is not None:
+            fn = fn
+        elif self.score_fn is not None:
+            fn = self.score_fn
+        else:
+            if "zero_division" not in kwargs:
+                kwargs["zero_division"] = 0
+            fn = f1_score
+        return fn(y_true, y_pred, **kwargs)
 
 
 class KinactiveRegressor(KinactiveModel):
@@ -613,17 +625,24 @@ class KinactiveRegressor(KinactiveModel):
     ) -> abc.Iterator[tuple[np.ndarray, np.ndarray]]:
         return _generate_fold_idx(df[self.cv_col].map(_get_unique_group).values, n)
 
-    def score(self, df: pd.DataFrame, **kwargs) -> float:
+    def score(self, df: pd.DataFrame, fn=None, **kwargs) -> float:
         """
-        Predict and score using the ``r2_score()`` function.
+        Predict and score on a dataset.
 
         :param df: A tabular dataset with features and target columns.
+        :param fn: A custom scoring function. If not provided, RMSD will be used.
         :param kwargs: Passed to the scoring function.
         :return: The resulting score.
         """
         y_pred = self.predict(df)
         y_true = np.squeeze(df[self.targets].values)
-        return r2_score(y_true, y_pred, **kwargs)
+        if fn:
+            fn = curry(fn)(**kwargs)
+        elif self.score_fn is not None:
+            fn = curry(self.score_fn)(**kwargs)
+        else:
+            fn = lambda yt, tp: np.sqrt(np.mean((y_true - y_pred) ** 2))
+        return fn(y_true, y_pred)
 
 
 DFGModels = t.NamedTuple(
@@ -935,7 +954,8 @@ def _cross_validate(
     df: pd.DataFrame,
     n: int,
     verbose: bool = False,
-) -> float:
+    return_scores: bool = False
+) -> float | list[float]:
     idx_gen = model.generate_fold_idx(df, n)
     if verbose:
         idx_gen = tqdm(idx_gen, total=n, desc="Cross-validating")
@@ -950,7 +970,7 @@ def _cross_validate(
         LOGGER.info(msg)
     else:
         LOGGER.debug(msg)
-    return score
+    return scores if return_scores else score
 
 
 def _cross_validate_and_predict(
@@ -958,7 +978,8 @@ def _cross_validate_and_predict(
     df: pd.DataFrame,
     n: int,
     verbose: bool = False,
-) -> tuple[float, pd.DataFrame]:
+    return_scores: bool = False,
+) -> tuple[float | list[float], pd.DataFrame]:
     df = df.copy()
     idx_gen = model.generate_fold_idx(df, n)
     if verbose:
@@ -985,6 +1006,8 @@ def _cross_validate_and_predict(
         LOGGER.info(msg)
     else:
         LOGGER.debug(msg)
+    if return_scores:
+        return scores, df
     return score, df
 
 
